@@ -57,6 +57,7 @@ export const ModernChatInterface = ({
     { cmd: '/chat list', desc: 'List saved conversations' },
     { cmd: '/restore', desc: 'Restore files from checkpoint' },
     { cmd: '/auth', desc: 'Change authentication method' },
+    { cmd: '/bug', desc: 'File an issue about Gemini CLI' },
     { cmd: '/about', desc: 'Show version information' },
     { cmd: '/quit', desc: 'Exit Gemini CLI' }
   ];
@@ -676,7 +677,7 @@ export const ModernChatInterface = ({
                   Ready to assist with your development
                 </h2>
                 <p className="text-gray-500 mb-6">
-                  Type a message or use / for commands, @ for files
+                  Type a message or use / for commands, @ for files, ! for shell
                 </p>
                 <div className="flex justify-center gap-4 text-sm text-gray-400">
                   <div className="flex items-center gap-2">
@@ -759,7 +760,7 @@ export const ModernChatInterface = ({
                 value={input}
                 onChange={handleInputChange}
                 onKeyDown={handleKeyDown}
-                placeholder="Type a message, / for commands, @ for files..."
+                placeholder="Type a message, / for commands, @ for files, ! for shell..."
                 disabled={isLoading}
                 className="w-full p-4 outline-none resize-none text-white placeholder-gray-400 disabled:opacity-50 bg-transparent"
                 rows="3"
@@ -771,15 +772,15 @@ export const ModernChatInterface = ({
                   <div className="flex gap-3">
                     <div className="flex items-center gap-1">
                       <AtSign className="w-3 h-3 text-green-400" />
-                      <span>files</span>
+                      <span>@ files</span>
                     </div>
                     <div className="flex items-center gap-1">
                       <Hash className="w-3 h-3 text-blue-400" />
-                      <span>commands</span>
+                      <span>/ commands</span>
                     </div>
                     <div className="flex items-center gap-1">
                       <Command className="w-3 h-3 text-purple-400" />
-                      <span>shell</span>
+                      <span>! shell</span>
                     </div>
                   </div>
                   {uploadedFiles.length > 0 && (

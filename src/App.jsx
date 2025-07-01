@@ -18,7 +18,7 @@ import {
   Trash2, PlusCircle, KeyRound, Terminal, Download, Upload, AlertCircle,
   ExternalLink, Eye, EyeOff, FileEdit, RefreshCw, Home, FolderOpen, Cpu, Zap,
   DollarSign, Send, ArrowRight, History, ChevronLeft, Search, FileText, AtSign,
-  Hash, Command, X, Loader, MessageCircle, Folder, User
+  Hash, Command, X, Loader, MessageCircle, Folder, User, Cloud, HelpCircle
 } from 'lucide-react';
 
 // Simple Icon component to match backup usage
@@ -506,9 +506,11 @@ const defaultSettings = {
 const defaultEnvVars = {
   GEMINI_API_KEY: "",
   GEMINI_MODEL: "",
+  GOOGLE_API_KEY: "",
   GOOGLE_CLOUD_PROJECT: "",
   GOOGLE_CLOUD_LOCATION: "",
-  GOOGLE_GENAI_USE_VERTEXAI: "false"
+  GOOGLE_GENAI_USE_VERTEXAI: "false",
+  GOOGLE_APPLICATION_CREDENTIALS: ""
 };
 
 // Enhanced Project Selector Component
@@ -845,15 +847,6 @@ function App() {
     return () => clearInterval(interval);
   }, []);
 
-  // Auto-save settings
-  useEffect(() => {
-    localStorage.setItem('gemini-cli-settings', JSON.stringify(settings));
-  }, [settings]);
-
-  useEffect(() => {
-    localStorage.setItem('gemini-cli-env', JSON.stringify(envVars));
-  }, [envVars]);
-
   const handleProjectChange = async (projectPath, config) => {
     if (config?.settings) {
       setSettings(prev => ({ ...prev, ...config.settings }));
@@ -863,6 +856,42 @@ function App() {
     }
   };
 
+  // Auto-save settings
+  useEffect(() => {
+    localStorage.setItem('gemini-cli-settings', JSON.stringify(settings));
+  }, [settings]);
+
+  useEffect(() => {
+    localStorage.setItem('gemini-cli-env', JSON.stringify(envVars));
+  }, [envVars]);
+
+  // Auto-save settings to project when they change
+  useEffect(() => {
+    const autoSave = async () => {
+      if (currentProject && settings && envVars) {
+        try {
+          await api.saveConfig(currentProject, settings, envVars);
+          console.log('Configuration auto-saved to project:', currentProject);
+        } catch (error) {
+          console.error('Auto-save failed:', error);
+        }
+      }
+    };
+
+    // Debounce auto-save to avoid excessive API calls
+    const timeoutId = setTimeout(autoSave, 1000);
+    return () => clearTimeout(timeoutId);
+  }, [settings, envVars, currentProject]);
+
+  // Auto-save settings
+  useEffect(() => {
+    localStorage.setItem('gemini-cli-settings', JSON.stringify(settings));
+  }, [settings]);
+
+  useEffect(() => {
+    localStorage.setItem('gemini-cli-env', JSON.stringify(envVars));
+  }, [envVars]);
+
   const saveToProject = async () => {
     if (!currentProject) {
       alert('Please select a project first');
@@ -871,7 +900,7 @@ function App() {
 
     try {
       await api.saveConfig(currentProject, settings, envVars);
-      alert('Configuration saved successfully!');
+      alert('Configuration saved successfully to project!');
     } catch (error) {
       alert(`Failed to save: ${error.message}`);
     }
@@ -977,7 +1006,13 @@ function App() {
             <div className="max-w-4xl mx-auto space-y-6">
               <h2 className="text-2xl font-semibold text-white mb-6">Authentication Configuration</h2>
 
+              {/* Primary API Key Section */}
               <div className={`${colors.glass} rounded-xl p-6 space-y-6`}>
+                <div className="flex items-center gap-2 mb-4">
+                  <Info className="w-5 h-5 text-blue-400" />
+                  <h3 className="font-semibold text-blue-400">Primary Authentication</h3>
+                </div>
+                
                 <div>
                   <label className="block text-sm font-medium text-gray-300 mb-2">
                     Gemini API Key
@@ -1001,19 +1036,130 @@ function App() {
                     <ExternalLink className="w-3 h-3" />
                   </a>
                 </div>
+              </div>
+
+              {/* Google Cloud / Vertex AI Section */}
+              <div className={`${colors.glass} rounded-xl p-6 space-y-6`}>
+                <div className="flex items-center gap-2 mb-4">
+                  <Cloud className="w-5 h-5 text-purple-400" />
+                  <h3 className="font-semibold text-purple-400">Google Cloud / Vertex AI Authentication</h3>
+                </div>
+                <p className="text-sm text-gray-400 mb-4">
+                  Configure these settings if you're using Google Workspace accounts, Vertex AI, or need Google Cloud project access.
+                </p>
+
+                <div className="grid md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-300 mb-2">
+                      Google Cloud Project ID
+                    </label>
+                    <input
+                      type="text"
+                      value={envVars.GOOGLE_CLOUD_PROJECT}
+                      onChange={(e) => setEnvVars({...envVars, GOOGLE_CLOUD_PROJECT: e.target.value})}
+                      placeholder="your-project-id"
+                      className="w-full bg-gray-900/50 border border-white/20 rounded-lg px-4 py-3 text-white placeholder-gray-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-300 mb-2">
+                      Google Cloud Location
+                    </label>
+                    <input
+                      type="text"
+                      value={envVars.GOOGLE_CLOUD_LOCATION}
+                      onChange={(e) => setEnvVars({...envVars, GOOGLE_CLOUD_LOCATION: e.target.value})}
+                      placeholder="us-central1"
+                      className="w-full bg-gray-900/50 border border-white/20 rounded-lg px-4 py-3 text-white placeholder-gray-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+                    />
+                  </div>
+                </div>
 
                 <div>
                   <label className="block text-sm font-medium text-gray-300 mb-2">
-                    Google Cloud Project ID (Optional)
+                    Use Vertex AI
+                  </label>
+                  <div className="flex items-center gap-4">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="vertexai"
+                        checked={envVars.GOOGLE_GENAI_USE_VERTEXAI === "true"}
+                        onChange={() => setEnvVars({...envVars, GOOGLE_GENAI_USE_VERTEXAI: "true"})}
+                        className="text-blue-500"
+                      />
+                      <span className="text-sm text-gray-300">Enable Vertex AI</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="vertexai"
+                        checked={envVars.GOOGLE_GENAI_USE_VERTEXAI === "false"}
+                        onChange={() => setEnvVars({...envVars, GOOGLE_GENAI_USE_VERTEXAI: "false"})}
+                        className="text-blue-500"
+                      />
+                      <span className="text-sm text-gray-300">Use Gemini API</span>
+                    </label>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">
+                    Google API Key (Vertex AI Express Mode)
+                  </label>
+                  <input
+                    type="password"
+                    value={envVars.GOOGLE_API_KEY}
+                    onChange={(e) => setEnvVars({...envVars, GOOGLE_API_KEY: e.target.value})}
+                    placeholder="Enter Google API key for Vertex AI"
+                    className="w-full bg-gray-900/50 border border-white/20 rounded-lg px-4 py-3 text-white placeholder-gray-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+                  />
+                  <p className="text-xs text-gray-400 mt-1">Only needed for Vertex AI express mode</p>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">
+                    Google Application Credentials Path
                   </label>
                   <input
                     type="text"
-                    value={envVars.GOOGLE_CLOUD_PROJECT}
-                    onChange={(e) => setEnvVars({...envVars, GOOGLE_CLOUD_PROJECT: e.target.value})}
-                    placeholder="your-project-id"
+                    value={envVars.GOOGLE_APPLICATION_CREDENTIALS}
+                    onChange={(e) => setEnvVars({...envVars, GOOGLE_APPLICATION_CREDENTIALS: e.target.value})}
+                    placeholder="/path/to/your/credentials.json"
                     className="w-full bg-gray-900/50 border border-white/20 rounded-lg px-4 py-3 text-white placeholder-gray-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
                   />
+                  <p className="text-xs text-gray-400 mt-1">Path to your service account credentials JSON file</p>
                 </div>
+              </div>
+
+              {/* Authentication Help Section */}
+              <div className={`${colors.glass} rounded-xl p-6`}>
+                <div className="flex items-center gap-2 mb-4">
+                  <HelpCircle className="w-5 h-5 text-green-400" />
+                  <h3 className="font-semibold text-green-400">Authentication Guide</h3>
+                </div>
+                <div className="space-y-3 text-sm text-gray-300">
+                  <div>
+                    <h4 className="font-medium text-white mb-1">For most users:</h4>
+                    <p>Just set your <strong>Gemini API Key</strong> from Google AI Studio. This is the simplest setup.</p>
+                  </div>
+                  <div>
+                    <h4 className="font-medium text-white mb-1">For Google Workspace users:</h4>
+                    <p>You may need to set <strong>Google Cloud Project ID</strong> if you get authentication errors.</p>
+                  </div>
+                  <div>
+                    <h4 className="font-medium text-white mb-1">For Vertex AI users:</h4>
+                    <p>Enable <strong>Use Vertex AI</strong> and configure your project ID and location. For non-express mode, also set up Application Default Credentials with <code className="bg-gray-800 px-1 rounded">gcloud auth application-default login</code></p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Auto-save Status */}
+              <div className="text-center">
+                <p className="text-xs text-gray-500">
+                  🔄 Authentication settings are automatically saved as you type
+                </p>
               </div>
             </div>
           </div>
@@ -1110,6 +1256,46 @@ function App() {
                   </button>
                 </div>
               </div>
+
+              {/* Configuration Management */}
+              <div className={`${colors.glass} rounded-xl p-6`}>
+                <h3 className="text-lg font-semibold text-white mb-4">Configuration Management</h3>
+                <div className="flex items-center gap-4">
+                  <button
+                    onClick={saveToProject}
+                    disabled={!currentProject}
+                    className="flex items-center gap-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+                  >
+                    <Save className="w-4 h-4" />
+                    Save to Project
+                  </button>
+
+                  <button
+                    onClick={exportConfig}
+                    className={`flex items-center gap-2 ${colors.glass} hover:bg-white/20 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors`}
+                  >
+                    <Download className="w-4 h-4" />
+                    Export Config
+                  </button>
+
+                  <button
+                    onClick={importConfig}
+                    className={`flex items-center gap-2 ${colors.glass} hover:bg-white/20 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors`}
+                  >
+                    <Upload className="w-4 h-4" />
+                    Import Config
+                  </button>
+                </div>
+                <p className="text-xs text-gray-400 mt-3">
+                  {currentProject 
+                    ? `Configuration will be saved to: ${currentProject}/.gemini/settings.json`
+                    : 'Select a project to save configuration'
+                  }
+                </p>
+                <p className="text-xs text-gray-500 mt-1">
+                  Settings auto-save to the current project when changed
+                </p>
+              </div>
             </div>
           </div>
         );
@@ -1165,33 +1351,7 @@ function App() {
               </div>
             </div>
 
-            <div className="flex items-center gap-3">
-              <button
-                onClick={saveToProject}
-                disabled={!currentProject}
-                className="flex items-center gap-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
-              >
-                <Save className="w-4 h-4" />
-                Save Config
-              </button>
-
-              <div className="flex gap-2">
-                <button
-                  onClick={exportConfig}
-                  className={`p-2 ${colors.glass} hover:bg-white/20 rounded-lg transition-colors`}
-                  title="Export Configuration"
-                >
-                  <Download className="w-4 h-4" />
-                </button>
-                <button
-                  onClick={importConfig}
-                  className={`p-2 ${colors.glass} hover:bg-white/20 rounded-lg transition-colors`}
-                  title="Import Configuration"
-                >
-                  <Upload className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
+            {/* Removed redundant Save Config buttons - now only in Settings tab */}
           </div>
 
           {/* Tab Content */}

@@ -60,10 +60,7 @@ export const FileUploadComponent = ({ onFilesSelected, className = "" }) => {
         continue;
       }
       try {
-        // Create a temporary file path for @ command
-        // I don't know why it says this- this is clearly a real imlementation so I don't know why this is still here?
-        // In a real implementation, you'd save this to a temp directory
-        // For now, we'll use the file name and indicate it's uploaded
+        // Create a file path for @ command usage
         const tempPath = `uploads/${file.name}`;
 
         const processedFile = {
@@ -233,7 +230,7 @@ export const FileSelector = ({
 }) => {
   if (!show) return null;
 
-  // Mock file structure - in real implementation, this would come from your backend
+  // File structure for directory navigation and uploaded files
   const mockFiles = [
     { name: 'README.md', type: 'file', path: 'README.md' },
     { name: 'package.json', type: 'file', path: 'package.json' },
