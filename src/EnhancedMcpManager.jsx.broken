@@ -1,0 +1,834 @@
+import React, { useState, useRef, useEffect } from 'react';
+import {
+  Server, Plus, Trash2, Edit3, Upload, Download, RefreshCw, Check, X, 
+  AlertCircle, Info, ExternalLink, Copy, Eye, EyeOff, FolderOpen, 
+  Terminal, Settings, ChevronDown, ChevronRight, Play, Square
+} from 'lucide-react';
+import { colors } from './ModernComponents';
+
+// Enhanced MCP Configuration Manager Component
+export const EnhancedMcpManager = ({ settings, setSettings, currentProject = null, api = null }) => {
+  const [activeTab, setActiveTab] = useState('servers');
+  const [editingServer, setEditingServer] = useState(null);
+  const [newServer, setNewServer] = useState({
+    name: '',
+    command: '',
+    args: [],
+    env: {},
+    cwd: '',
+    timeout: 600000,
+    trust: false
+  });
+  const [importMode, setImportMode] = useState(false);
+  const [importConfig, setImportConfig] = useState('');
+  const [testingServer, setTestingServer] = useState(null);
+  const [serverStatus, setServerStatus] = useState({});
+  const [showAdvanced, setShowAdvanced] = useState({});
+  const fileInputRef = useRef(null);
+
+  // Predefined server templates
+  const serverTemplates = {
+    'Python (uv)': {
+      command: 'uv',
+      args: ['--directory', '/path/to/server', 'run', 'server-name'],
+      placeholder: 'Python server using UV package manager'
+    },
+    'Python (uvx)': {
+      command: 'uvx',
+      args: ['server-package-name'],
+      placeholder: 'Python server using UVX'
+    },
+    'Node.js': {
+      command: 'node',
+      args: ['server.js'],
+      placeholder: 'Node.js MCP server'
+    },
+    'NPX': {
+      command: 'npx',
+      args: ['-y', 'package-name'],
+      placeholder: 'NPX package execution'
+    },
+    'Docker': {
+      command: 'docker',
+      args: ['run', '-i', '--rm', 'image-name'],
+      placeholder: 'Docker containerized server'
+    },
+    'Executable': {
+      command: '/path/to/executable',
+      args: [],
+      placeholder: 'Direct executable path'
+    }
+  };
+
+  // Common environment variables for different server types
+  const commonEnvVars = {
+    'API Keys': ['API_KEY', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'GOOGLE_API_KEY'],
+    'Database': ['DATABASE_URL', 'DB_HOST', 'DB_PORT', 'DB_NAME'],
+    'Paths': ['DATA_DIR', 'CONFIG_PATH', 'WORKSPACE_PATH'],
+    'Auth': ['TOKEN', 'SECRET', 'CREDENTIALS_PATH']
+  };
+
+  // Example configurations for import
+  const exampleConfigs = {
+    'Claude Desktop': `{
+  "mcpServers": {
+    "sqlite": {
+      "command": "uv",
+      "args": ["--directory", "/path/to/server", "run", "mcp-server-sqlite", "--db-path", "/path/to/db.sqlite"]
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/workspace"]
+    }
+  }
+}`,
+    'Standard MCP': `{
+  "mcpServers": {
+    "brave-search": {
+      "command": "uvx",
+      "args": ["mcp-server-brave-search"],
+      "env": {
+        "BRAVE_API_KEY": "$BRAVE_API_KEY"
+      }
+    },
+    "github": {
+      "command": "uvx",
+      "args": ["mcp-server-github"],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "$GITHUB_PAT"
+      }
+    }
+  }
+}`
+  };
+
+  useEffect(() => {
+    // Auto-detect server status
+    checkServerStatuses();
+  }, [settings.mcpServers]);
+
+  const checkServerStatuses = async () => {
+    const statuses = {};
+    for (const [name, config] of Object.entries(settings.mcpServers || {})) {
+      try {
+        // Simulate server status check (would normally ping the server)
+        statuses[name] = Math.random() > 0.3 ? 'connected' : 'disconnected';
+      } catch (error) {
+        statuses[name] = 'error';
+      }
+    }
+    setServerStatus(statuses);
+  };
+
+  const addServer = (template = null) => {
+    const serverName = newServer.name || `server-${Date.now()}`;
+    
+    const serverConfig = template ? {
+      command: template.command,
+      args: [...template.args],
+      env: {},
+      cwd: '',
+      timeout: 600000,
+      trust: false
+    } : { ...newServer };
+
+    setSettings({
+      ...settings,
+      mcpServers: {
+        ...settings.mcpServers,
+        [serverName]: serverConfig
+      }
+    });
+
+    setNewServer({
+      name: '',
+      command: '',
+      args: [],
+      env: {},
+      cwd: '',
+      timeout: 600000,
+      trust: false
+    });
+  };
+
+  const updateServer = (name, config) => {
+    const newServers = { ...settings.mcpServers };
+    newServers[name] = config;
+    setSettings({ ...settings, mcpServers: newServers });
+  };
+
+  const removeServer = (name) => {
+    const newServers = { ...settings.mcpServers };
+    delete newServers[name];
+    setSettings({ ...settings, mcpServers: newServers });
+  };
+
+  const duplicateServer = (name) => {
+    const originalConfig = settings.mcpServers[name];
+    const newName = `${name}_copy`;
+    setSettings({
+      ...settings,
+      mcpServers: {
+        ...settings.mcpServers,
+        [newName]: { ...originalConfig }
+      }
+    });
+  };
+
+  const importConfiguration = () => {
+    try {
+      const config = JSON.parse(importConfig);
+      let mcpServers = {};
+
+      // Handle different config formats
+      if (config.mcpServers) {
+        mcpServers = config.mcpServers;
+      } else if (config.servers) {
+        mcpServers = config.servers;
+      } else {
+        mcpServers = config;
+      }
+
+      // Translate to Gemini CLI format if needed
+      const translatedServers = {};
+      for (const [name, serverConfig] of Object.entries(mcpServers)) {
+        translatedServers[name] = {
+          command: serverConfig.command,
+          args: serverConfig.args || [],
+          env: serverConfig.env || {},
+          cwd: serverConfig.cwd || '',
+          timeout: serverConfig.timeout || 600000,
+          trust: serverConfig.trust || false
+        };
+      }
+
+      setSettings({
+        ...settings,
+        mcpServers: {
+          ...settings.mcpServers,
+          ...translatedServers
+        }
+      });
+
+      setImportConfig('');
+      setImportMode(false);
+      alert(`Successfully imported ${Object.keys(translatedServers).length} servers!`);
+    } catch (error) {
+      alert(`Import failed: ${error.message}`);
+    }
+  };
+
+  const exportConfiguration = () => {
+    const config = {
+      mcpServers: settings.mcpServers || {},
+      timestamp: new Date().toISOString(),
+      format: 'gemini-cli'
+    };
+    
+    const blob = new Blob([JSON.stringify(config, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'mcp-servers-config.json';
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const testServer = async (name) => {
+    setTestingServer(name);
+    // Simulate server test
+    setTimeout(() => {
+      setTestingServer(null);
+      alert(`Server "${name}" test completed. Check the console for details.`);
+    }, 2000);
+  };
+
+  const renderServerCard = (name, config) => {
+    const status = serverStatus[name] || 'unknown';
+    const isExpanded = showAdvanced[name];
+
+    return (
+      <div key={name} className={`${colors.glass} rounded-xl border border-white/10 overflow-hidden`}>
+        <div className="p-4">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-3">
+              <div className={`w-3 h-3 rounded-full ${
+                status === 'connected' ? 'bg-green-400 animate-pulse' :
+                status === 'disconnected' ? 'bg-red-400' :
+                status === 'error' ? 'bg-orange-400' : 'bg-gray-400'
+              }`} />
+              <h4 className="font-semibold text-white text-lg">{name}</h4>
+              {config.trust && (
+                <span className="bg-blue-600/20 text-blue-400 text-xs px-2 py-1 rounded-full">
+                  Trusted
+                </span>
+              )}
+            </div>
+            
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => testServer(name)}
+                disabled={testingServer === name}
+                className="p-2 hover:bg-white/10 rounded-lg transition-colors"
+                title="Test Server"
+              >
+                {testingServer === name ? (
+                  <RefreshCw className="w-4 h-4 animate-spin text-blue-400" />
+                ) : (
+                  <Play className="w-4 h-4 text-green-400" />
+                )}
+              </button>
+              
+              <button
+                onClick={() => setShowAdvanced({ ...showAdvanced, [name]: !isExpanded })}
+                className="p-2 hover:bg-white/10 rounded-lg transition-colors"
+              >
+                {isExpanded ? (
+                  <ChevronDown className="w-4 h-4 text-gray-400" />
+                ) : (
+                  <ChevronRight className="w-4 h-4 text-gray-400" />
+                )}
+              </button>
+
+              <button
+                onClick={() => setEditingServer(name)}
+                className="p-2 hover:bg-white/10 rounded-lg transition-colors"
+                title="Edit Server"
+              >
+                <Edit3 className="w-4 h-4 text-blue-400" />
+              </button>
+
+              <button
+                onClick={() => duplicateServer(name)}
+                className="p-2 hover:bg-white/10 rounded-lg transition-colors"
+                title="Duplicate Server"
+              >
+                <Copy className="w-4 h-4 text-purple-400" />
+              </button>
+
+              <button
+                onClick={() => removeServer(name)}
+                className="p-2 hover:bg-white/10 rounded-lg transition-colors"
+                title="Remove Server"
+              >
+                <Trash2 className="w-4 h-4 text-red-400" />
+              </button>
+            </div>
+          </div>
+
+          <div className="space-y-2 text-sm">
+            <div className="flex items-start gap-2">
+              <span className="text-gray-400 min-w-[80px]">Command:</span>
+              <code className="bg-gray-800/50 px-2 py-1 rounded text-green-400 flex-1">
+                {config.command}
+              </code>
+            </div>
+
+            {config.args?.length > 0 && (
+              <div className="flex items-start gap-2">
+                <span className="text-gray-400 min-w-[80px]">Args:</span>
+                <div className="flex-1">
+                  {config.args.map((arg, index) => (
+                    <code key={index} className="bg-gray-800/50 px-2 py-1 rounded text-blue-400 mr-2 mb-1 inline-block text-xs">
+                      {arg}
+                    </code>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {isExpanded && (
+              <div className="space-y-2 pt-2 border-t border-white/10">
+                {config.cwd && (
+                  <div className="flex items-center gap-2">
+                    <span className="text-gray-400 min-w-[80px]">Directory:</span>
+                    <code className="bg-gray-800/50 px-2 py-1 rounded text-yellow-400">{config.cwd}</code>
+                  </div>
+                )}
+
+                {Object.keys(config.env || {}).length > 0 && (
+                  <div className="flex items-start gap-2">
+                    <span className="text-gray-400 min-w-[80px]">Environment:</span>
+                    <div className="flex-1 space-y-1">
+                      {Object.entries(config.env).map(([key, value]) => (
+                        <div key={key} className="flex items-center gap-2">
+                          <code className="bg-purple-900/30 px-2 py-1 rounded text-purple-400 text-xs">
+                            {key}
+                          </code>
+                          <span className="text-gray-500">=</span>
+                          <code className="bg-gray-800/50 px-2 py-1 rounded text-gray-300 text-xs">
+                            {value.startsWith('$') ? value : '***'}
+                          </code>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex items-center gap-4 text-xs text-gray-400">
+                  <span>Timeout: {config.timeout}ms</span>
+                  <span>Status: <span className={`${
+                    status === 'connected' ? 'text-green-400' :
+                    status === 'disconnected' ? 'text-red-400' :
+                    status === 'error' ? 'text-orange-400' : 'text-gray-400'
+                  }`}>{status}</span></span>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const renderServerEditor = () => {
+    const server = editingServer ? settings.mcpServers[editingServer] : newServer;
+    const isEdit = !!editingServer;
+
+    return (
+      <div className={`${colors.glass} rounded-xl p-6 space-y-6`}>
+        <div className="flex items-center justify-between">
+          <h3 className="text-xl font-semibold text-white">
+            {isEdit ? `Edit Server: ${editingServer}` : 'Add New MCP Server'}
+          </h3>
+          <button
+            onClick={() => setEditingServer(null)}
+            className="p-2 hover:bg-white/10 rounded-lg transition-colors"
+          >
+            <X className="w-5 h-5 text-gray-400" />
+          </button>
+        </div>
+
+        {!isEdit && (
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-2">
+              Quick Templates
+            </label>
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+              {Object.entries(serverTemplates).map(([name, template]) => (
+                <button
+                  key={name}
+                  onClick={() => {
+                    setNewServer({
+                      ...newServer,
+                      command: template.command,
+                      args: [...template.args]
+                    });
+                  }}
+                  className="p-3 bg-white/5 hover:bg-white/10 rounded-lg text-left transition-colors"
+                >
+                  <div className="font-medium text-white text-sm">{name}</div>
+                  <div className="text-xs text-gray-400 mt-1">{template.placeholder}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-2">
+              Server Name
+            </label>
+            <input
+              type="text"
+              value={isEdit ? editingServer : newServer.name}
+              onChange={(e) => {
+                if (!isEdit) {
+                  setNewServer({ ...newServer, name: e.target.value });
+                }
+              }}
+              disabled={isEdit}
+              placeholder="e.g., sqlite, github, brave-search"
+              className="w-full bg-gray-900/50 border border-white/20 rounded-lg px-4 py-3 text-white placeholder-gray-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-2">
+              Command
+            </label>
+            <input
+              type="text"
+              value={server.command}
+              onChange={(e) => {
+                const updated = { ...server, command: e.target.value };
+                if (isEdit) {
+                  updateServer(editingServer, updated);
+                } else {
+                  setNewServer(updated);
+                }
+              }}
+              placeholder="e.g., uv, uvx, node, python, docker"
+              className="w-full bg-gray-900/50 border border-white/20 rounded-lg px-4 py-3 text-white placeholder-gray-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+            />
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-gray-300 mb-2">
+            Arguments (comma-separated)
+          </label>
+          <input
+            type="text"
+            value={(server.args || []).join(', ')}
+            onChange={(e) => {
+              const args = e.target.value.split(',').map(arg => arg.trim()).filter(Boolean);
+              const updated = { ...server, args };
+              if (isEdit) {
+                updateServer(editingServer, updated);
+              } else {
+                setNewServer(updated);
+              }
+            }}
+            placeholder="e.g., --directory, /path/to/server, run, server-name"
+            className="w-full bg-gray-900/50 border border-white/20 rounded-lg px-4 py-3 text-white placeholder-gray-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+          />
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-2">
+              Working Directory (optional)
+            </label>
+            <input
+              type="text"
+              value={server.cwd || ''}
+              onChange={(e) => {
+                const updated = { ...server, cwd: e.target.value };
+                if (isEdit) {
+                  updateServer(editingServer, updated);
+                } else {
+                  setNewServer(updated);
+                }
+              }}
+              placeholder="/path/to/server/directory"
+              className="w-full bg-gray-900/50 border border-white/20 rounded-lg px-4 py-3 text-white placeholder-gray-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-2">
+              Timeout (ms)
+            </label>
+            <input
+              type="number"
+              value={server.timeout || 600000}
+              onChange={(e) => {
+                const updated = { ...server, timeout: parseInt(e.target.value) || 600000 };
+                if (isEdit) {
+                  updateServer(editingServer, updated);
+                } else {
+                  setNewServer(updated);
+                }
+              }}
+              className="w-full bg-gray-900/50 border border-white/20 rounded-lg px-4 py-3 text-white focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+            />
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-gray-300 mb-2">
+            Environment Variables
+          </label>
+          <div className="space-y-2">
+            {Object.entries(server.env || {}).map(([key, value], index) => (
+              <div key={index} className="flex gap-2">
+                <input
+                  type="text"
+                  value={key}
+                  onChange={(e) => {
+                    const newEnv = { ...server.env };
+                    delete newEnv[key];
+                    newEnv[e.target.value] = value;
+                    const updated = { ...server, env: newEnv };
+                    if (isEdit) {
+                      updateServer(editingServer, updated);
+                    } else {
+                      setNewServer(updated);
+                    }
+                  }}
+                  placeholder="VARIABLE_NAME"
+                  className="flex-1 bg-gray-900/50 border border-white/20 rounded-lg px-3 py-2 text-white placeholder-gray-400 focus:border-blue-500"
+                />
+                <input
+                  type="text"
+                  value={value}
+                  onChange={(e) => {
+                    const updated = { 
+                      ...server, 
+                      env: { ...server.env, [key]: e.target.value }
+                    };
+                    if (isEdit) {
+                      updateServer(editingServer, updated);
+                    } else {
+                      setNewServer(updated);
+                    }
+                  }}
+                  placeholder="$VALUE or actual value"
+                  className="flex-1 bg-gray-900/50 border border-white/20 rounded-lg px-3 py-2 text-white placeholder-gray-400 focus:border-blue-500"
+                />
+                <button
+                  onClick={() => {
+                    const newEnv = { ...server.env };
+                    delete newEnv[key];
+                    const updated = { ...server, env: newEnv };
+                    if (isEdit) {
+                      updateServer(editingServer, updated);
+                    } else {
+                      setNewServer(updated);
+                    }
+                  }}
+                  className="p-2 text-red-400 hover:bg-red-900/20 rounded-lg transition-colors"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            ))}
+            
+            <button
+              onClick={() => {
+                const updated = { 
+                  ...server, 
+                  env: { ...server.env, '': '' }
+                };
+                if (isEdit) {
+                  updateServer(editingServer, updated);
+                } else {
+                  setNewServer(updated);
+                }
+              }}
+              className="w-full p-2 border border-dashed border-white/20 rounded-lg text-gray-400 hover:text-white hover:border-white/40 transition-colors"
+            >
+              + Add Environment Variable
+            </button>
+          </div>
+
+          <div className="mt-3">
+            <label className="text-sm text-gray-400">Quick Add:</label>
+            <div className="flex flex-wrap gap-2 mt-1">
+              {Object.entries(commonEnvVars).map(([category, vars]) => (
+                <div key={category} className="relative group">
+                  <button className="text-xs bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded transition-colors">
+                    {category}
+                  </button>
+                  <div className="absolute top-full left-0 mt-1 bg-gray-800 border border-white/20 rounded-lg p-2 space-y-1 hidden group-hover:block z-10 min-w-[150px]">
+                    {vars.map(varName => (
+                      <button
+                        key={varName}
+                        onClick={() => {
+                          const updated = { 
+                            ...server, 
+                            env: { ...server.env, [varName]: `$${varName}` }
+                          };
+                          if (isEdit) {
+                            updateServer(editingServer, updated);
+                          } else {
+                            setNewServer(updated);
+                          }
+                        }}
+                        className="block w-full text-left text-xs px-2 py-1 hover:bg-white/10 rounded"
+                      >
+                        {varName}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between p-4 bg-gray-900/30 rounded-lg">
+          <div>
+            <h4 className="text-sm font-medium text-gray-300">Trust Server</h4>
+            <p className="text-xs text-gray-400 mt-1">Skip confirmation dialogs for this server</p>
+          </div>
+          <button
+            onClick={() => {
+              const updated = { ...server, trust: !server.trust };
+              if (isEdit) {
+                updateServer(editingServer, updated);
+              } else {
+                setNewServer(updated);
+              }
+            }}
+            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+              server.trust ? 'bg-blue-600' : 'bg-gray-600'
+            }`}
+          >
+            <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+              server.trust ? 'translate-x-6' : 'translate-x-1'
+            }`} />
+          </button>
+        </div>
+
+        <div className="flex gap-3">
+          <button
+            onClick={() => {
+              if (isEdit) {
+                setEditingServer(null);
+              } else {
+                addServer();
+              }
+            }}
+            disabled={!server.command || (!isEdit && !newServer.name)}
+            className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 text-white px-6 py-3 rounded-lg font-medium transition-colors"
+          >
+            <Check className="w-4 h-4" />
+            {isEdit ? 'Update Server' : 'Add Server'}
+          </button>
+          
+          <button
+            onClick={() => setEditingServer(null)}
+            className="px-6 py-3 bg-gray-600 hover:bg-gray-700 text-white rounded-lg font-medium transition-colors"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <h2 className="text-2xl font-semibold text-white">MCP Server Management</h2>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => checkServerStatuses()}
+            className={`flex items-center gap-2 px-4 py-2 ${colors.glass} hover:bg-white/20 rounded-lg transition-colors`}
+          >
+            <RefreshCw className="w-4 h-4" />
+            Refresh Status
+          </button>
+          
+          <button
+            onClick={() => setImportMode(!importMode)}
+            className={`flex items-center gap-2 px-4 py-2 ${colors.glass} hover:bg-white/20 rounded-lg transition-colors`}
+          >
+            <Upload className="w-4 h-4" />
+            Import Config
+          </button>
+          
+          <button
+            onClick={exportConfiguration}
+            className={`flex items-center gap-2 px-4 py-2 ${colors.glass} hover:bg-white/20 rounded-lg transition-colors`}
+          >
+            <Download className="w-4 h-4" />
+            Export Config
+          </button>
+        </div>
+      </div>
+
+      {/* Import Mode */}
+      {importMode && (
+        <div className={`${colors.glass} rounded-xl p-6 space-y-4`}>
+          <h3 className="text-lg font-semibold text-blue-400">Import MCP Configuration</h3>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {Object.entries(exampleConfigs).map(([name, config]) => (
+              <div key={name} className="space-y-2">
+                <button
+                  onClick={() => setImportConfig(config)}
+                  className="w-full text-left p-3 bg-white/5 hover:bg-white/10 rounded-lg transition-colors"
+                >
+                  <div className="font-medium text-white">{name}</div>
+                  <div className="text-xs text-gray-400">Click to load example</div>
+                </button>
+              </div>
+            ))}
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-2">
+              Paste your MCP configuration JSON
+            </label>
+            <textarea
+              value={importConfig}
+              onChange={(e) => setImportConfig(e.target.value)}
+              placeholder="Paste your configuration here..."
+              className="w-full h-48 bg-gray-900/50 border border-white/20 rounded-lg p-4 text-sm font-mono text-white placeholder-gray-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+            />
+          </div>
+
+          <div className="flex gap-3">
+            <button
+              onClick={importConfiguration}
+              disabled={!importConfig.trim()}
+              className="flex items-center gap-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-600 text-white px-4 py-2 rounded-lg transition-colors"
+            >
+              <Upload className="w-4 h-4" />
+              Import Configuration
+            </button>
+            <button
+              onClick={() => {
+                setImportMode(false);
+                setImportConfig('');
+              }}
+              className="px-4 py-2 bg-gray-600 hover:bg-gray-700 text-white rounded-lg transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Add/Edit Server */}
+      {(editingServer || !Object.keys(settings.mcpServers || {}).length) && renderServerEditor()}
+
+      {/* Server List */}
+      {Object.keys(settings.mcpServers || {}).length > 0 && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-lg font-semibold text-white">
+              Configured Servers ({Object.keys(settings.mcpServers || {}).length})
+            </h3>
+            {!editingServer && (
+              <button
+                onClick={() => setNewServer({ name: '', command: '', args: [], env: {}, cwd: '', timeout: 600000, trust: false })}
+                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition-colors"
+              >
+                <Plus className="w-4 h-4" />
+                Add Server
+              </button>
+            )}
+          </div>
+
+          <div className="space-y-4">
+            {Object.entries(settings.mcpServers || {}).map(([name, config]) => 
+              renderServerCard(name, config)
+            )}
+          </div>
+        </div>
+      )}
+
+      {Object.keys(settings.mcpServers || {}).length === 0 && !editingServer && (
+        <div className={`${colors.glass} rounded-xl p-8 text-center`}>
+          <Server className="w-16 h-16 text-gray-400 mx-auto mb-4" />
+          <h3 className="text-xl font-medium text-gray-300 mb-2">No MCP Servers Configured</h3>
+          <p className="text-gray-400 mb-6 max-w-md mx-auto">
+            MCP servers extend Gemini CLI with custom tools and capabilities. 
+            Add your first server to get started.
+          </p>
+          <div className="flex justify-center gap-3">
+            <button
+              onClick={() => setNewServer({ name: '', command: '', args: [], env: {}, cwd: '', timeout: 600000, trust: false })}
+              className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg font-medium transition-colors"
+            >
+              Add First Server
+            </button>
+            <button
+              onClick={() => setImportMode(true)}
+              className={`${colors.glass} hover:bg-white/20 text-white px-6 py-3 rounded-lg font-medium transition-colors`}
+            >
+              Import Configuration
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default EnhancedMcpManager;
