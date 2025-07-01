@@ -156,22 +156,32 @@ const MCPServers = ({ settings, setSettings }) => {
   const addServer = () => {
     if (!newServer.name || !newServer.command) return;
 
+    let envVars = {};
+    if (newServer.env && newServer.env.trim()) {
+      try {
+        envVars = JSON.parse(newServer.env);
+      } catch (error) {
+        showToast('Invalid JSON in Environment Variables field. Please check your syntax.', 'error');
+        return;
+      }
+    }
+
     const serverConfig = {
       command: newServer.command,
       args: newServer.args ? newServer.args.split(',').map(s => s.trim()).filter(s => s) : [],
       cwd: newServer.cwd || undefined,
       timeout: newServer.timeout,
       trust: newServer.trust,
-      env: newServer.env ? JSON.parse(newServer.env) : {}
+      env: envVars
     };
 
-    setSettings({
-      ...settings,
+    setSettings(prevSettings => ({
+      ...prevSettings,
       mcpServers: {
-        ...settings.mcpServers,
+        ...prevSettings.mcpServers,
         [newServer.name]: serverConfig
       }
-    });
+    }));
 
     setNewServer({
       name: '',
@@ -183,20 +193,83 @@ const MCPServers = ({ settings, setSettings }) => {
       env: ''
     });
     setEditingServer(null);
+    
+    // Show success notification
+    showToast(`MCP server "${newServer.name}" added successfully!`, 'success');
   };
 
   const removeServer = (serverName) => {
-    const newServers = { ...settings.mcpServers };
-    delete newServers[serverName];
-    setSettings({ ...settings, mcpServers: newServers });
+    setSettings(prevSettings => {
+      const newServers = { ...prevSettings.mcpServers };
+      delete newServers[serverName];
+      return { ...prevSettings, mcpServers: newServers };
+    });
+    
+    // Show success notification
+    showToast(`MCP server "${serverName}" removed successfully!`, 'success');
   };
 
   const handleTranslatedConfig = (geminiConfig) => {
-    setSettings({
-      ...settings,
-      mcpServers: geminiConfig
-    });
+    setSettings(prevSettings => ({
+      ...prevSettings,
+      mcpServers: {
+        ...prevSettings.mcpServers,
+        ...geminiConfig
+      }
+    }));
     setShowTranslator(false);
+  };
+
+  const importMcpConfig = () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json';
+    input.onchange = async (e) => {
+      const file = e.target.files[0];
+      if (file) {
+        try {
+          const text = await file.text();
+          const config = JSON.parse(text);
+          
+          // Handle different config formats
+          let mcpServers = {};
+          
+          if (config.mcpServers) {
+            // Gemini CLI format
+            mcpServers = config.mcpServers;
+          } else if (config.settings && config.settings.mcpServers) {
+            // Full config export format
+            mcpServers = config.settings.mcpServers;
+          } else {
+            // Standard MCP format - translate it
+            for (const [name, serverConfig] of Object.entries(config)) {
+              mcpServers[name] = {
+                command: serverConfig.command,
+                args: serverConfig.args || [],
+                env: serverConfig.env || {},
+                cwd: serverConfig.cwd || undefined,
+                timeout: serverConfig.timeout || 600000,
+                trust: serverConfig.trust || false
+              };
+            }
+          }
+          
+          // Merge with existing servers
+          setSettings(prevSettings => ({
+            ...prevSettings,
+            mcpServers: {
+              ...prevSettings.mcpServers,
+              ...mcpServers
+            }
+          }));
+          
+          showToast(`Successfully imported ${Object.keys(mcpServers).length} MCP server(s)!`, 'success');
+        } catch (error) {
+          showToast(`Failed to import MCP configuration: ${error.message}`, 'error');
+        }
+      }
+    };
+    input.click();
   };
 
   return (
@@ -205,11 +278,18 @@ const MCPServers = ({ settings, setSettings }) => {
         <h3 className="text-lg font-semibold">MCP Server Configurations</h3>
         <div className="flex gap-2">
           <button
-            onClick={() => setShowTranslator(!showTranslator)}
+            onClick={importMcpConfig}
             className="flex items-center gap-2 bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg transition-colors"
           >
-            <Icon name="FileEdit" className="w-4 h-4" />
+            <Icon name="Upload" className="w-4 h-4" />
             Import Config
+          </button>
+          <button
+            onClick={() => setShowTranslator(!showTranslator)}
+            className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg transition-colors"
+          >
+            <Icon name="FileEdit" className="w-4 h-4" />
+            Config Translator
           </button>
           <button
             onClick={() => setEditingServer('new')}
@@ -823,6 +903,20 @@ function App() {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [currentProject, setCurrentProject] = useState("");
   const [serverHealth, setServerHealth] = useState(false);
+  
+  // Enhanced autosave state management
+  const [autoSaveStatus, setAutoSaveStatus] = useState({
+    status: 'idle', // 'idle', 'saving', 'saved', 'error'
+    lastSaved: null,
+    error: null
+  });
+
+  // Toast notification state for user feedback
+  const [toastNotification, setToastNotification] = useState({
+    show: false,
+    message: '',
+    type: 'info' // 'info', 'success', 'error'
+  });
 
   const [settings, setSettings] = useState(() => {
     const saved = localStorage.getItem('gemini-cli-settings');
@@ -833,6 +927,14 @@ function App() {
     const saved = localStorage.getItem('gemini-cli-env');
     return saved ? { ...defaultEnvVars, ...JSON.parse(saved) } : defaultEnvVars;
   });
+
+  // Toast notification function
+  const showToast = (message, type = 'info') => {
+    setToastNotification({ show: true, message, type });
+    setTimeout(() => {
+      setToastNotification(prev => ({ ...prev, show: false }));
+    }, 4000);
+  };
 
   // Check server health on mount
   useEffect(() => {
@@ -856,24 +958,66 @@ function App() {
     }
   };
 
-  // Auto-save settings
+  // Enhanced Auto-save settings with visual feedback
   useEffect(() => {
+    // Save to localStorage immediately
     localStorage.setItem('gemini-cli-settings', JSON.stringify(settings));
   }, [settings]);
 
   useEffect(() => {
+    // Save to localStorage immediately
     localStorage.setItem('gemini-cli-env', JSON.stringify(envVars));
   }, [envVars]);
 
-  // Auto-save settings to project when they change
+  // Enhanced Auto-save settings to project when they change
   useEffect(() => {
     const autoSave = async () => {
       if (currentProject && settings && envVars) {
+        setAutoSaveStatus(prev => ({ ...prev, status: 'saving' }));
+        
         try {
           await api.saveConfig(currentProject, settings, envVars);
+          setAutoSaveStatus({
+            status: 'saved',
+            lastSaved: new Date(),
+            error: null
+          });
           console.log('Configuration auto-saved to project:', currentProject);
+          
+          // Reset status after 3 seconds
+          setTimeout(() => {
+            setAutoSaveStatus(prev => ({ ...prev, status: 'idle' }));
+          }, 3000);
+          
         } catch (error) {
           console.error('Auto-save failed:', error);
+          setAutoSaveStatus({
+            status: 'error',
+            lastSaved: null,
+            error: error.message
+          });
+          
+          // Show toast notification for error
+          showToast(`Auto-save failed: ${error.message}`, 'error');
+          
+          // Try to retry after 5 seconds
+          setTimeout(async () => {
+            try {
+              await api.saveConfig(currentProject, settings, envVars);
+              setAutoSaveStatus({
+                status: 'saved',
+                lastSaved: new Date(),
+                error: null
+              });
+              showToast('Configuration auto-saved successfully (retry)', 'success');
+              setTimeout(() => {
+                setAutoSaveStatus(prev => ({ ...prev, status: 'idle' }));
+              }, 3000);
+            } catch (retryError) {
+              console.error('Auto-save retry failed:', retryError);
+              showToast('Auto-save retry failed. Please save manually.', 'error');
+            }
+          }, 5000);
         }
       }
     };
@@ -883,26 +1027,35 @@ function App() {
     return () => clearTimeout(timeoutId);
   }, [settings, envVars, currentProject]);
 
-  // Auto-save settings
-  useEffect(() => {
-    localStorage.setItem('gemini-cli-settings', JSON.stringify(settings));
-  }, [settings]);
-
-  useEffect(() => {
-    localStorage.setItem('gemini-cli-env', JSON.stringify(envVars));
-  }, [envVars]);
-
   const saveToProject = async () => {
     if (!currentProject) {
-      alert('Please select a project first');
+      showToast('Please select a project first', 'error');
       return;
     }
 
+    setAutoSaveStatus(prev => ({ ...prev, status: 'saving' }));
+
     try {
       await api.saveConfig(currentProject, settings, envVars);
-      alert('Configuration saved successfully to project!');
+      setAutoSaveStatus({
+        status: 'saved',
+        lastSaved: new Date(),
+        error: null
+      });
+      showToast('Configuration saved successfully to project!', 'success');
+      
+      // Reset status after 3 seconds
+      setTimeout(() => {
+        setAutoSaveStatus(prev => ({ ...prev, status: 'idle' }));
+      }, 3000);
+      
     } catch (error) {
-      alert(`Failed to save: ${error.message}`);
+      setAutoSaveStatus({
+        status: 'error',
+        lastSaved: null,
+        error: error.message
+      });
+      showToast(`Failed to save: ${error.message}`, 'error');
     }
   };
 
@@ -934,9 +1087,9 @@ function App() {
           const config = JSON.parse(text);
           if (config.settings) setSettings(prev => ({ ...prev, ...config.settings }));
           if (config.envVars) setEnvVars(prev => ({ ...prev, ...config.envVars }));
-          alert('Configuration imported successfully!');
+          showToast('Configuration imported successfully!', 'success');
         } catch (error) {
-          alert(`Failed to import: ${error.message}`);
+          showToast(`Failed to import: ${error.message}`, 'error');
         }
       }
     };
@@ -1270,6 +1423,17 @@ function App() {
                     Save to Project
                   </button>
 
+                  {/* Force Save button - shows when autosave fails */}
+                  {autoSaveStatus.status === 'error' && currentProject && (
+                    <button
+                      onClick={saveToProject}
+                      className="flex items-center gap-2 bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors animate-pulse"
+                    >
+                      <RefreshCw className="w-4 h-4" />
+                      Force Save
+                    </button>
+                  )}
+
                   <button
                     onClick={exportConfig}
                     className={`flex items-center gap-2 ${colors.glass} hover:bg-white/20 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors`}
@@ -1292,9 +1456,16 @@ function App() {
                     : 'Select a project to save configuration'
                   }
                 </p>
-                <p className="text-xs text-gray-500 mt-1">
-                  Settings auto-save to the current project when changed
-                </p>
+                <div className="flex items-center justify-between mt-1">
+                  <p className="text-xs text-gray-500">
+                    Settings auto-save to the current project when changed (1s delay)
+                  </p>
+                  {autoSaveStatus.error && (
+                    <span className="text-xs text-red-400 bg-red-900/20 px-2 py-1 rounded">
+                      {autoSaveStatus.error}
+                    </span>
+                  )}
+                </div>
               </div>
             </div>
           </div>
@@ -1349,6 +1520,43 @@ function App() {
                   {serverHealth ? 'Connected' : 'Disconnected'}
                 </span>
               </div>
+
+              {/* Auto-save Status */}
+              {currentProject && (
+                <div className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-all duration-300 ${
+                  autoSaveStatus.status === 'saving' ? 'bg-blue-900/20 text-blue-400' :
+                  autoSaveStatus.status === 'saved' ? 'bg-green-900/20 text-green-400' :
+                  autoSaveStatus.status === 'error' ? 'bg-red-900/20 text-red-400' :
+                  `${colors.glass} text-gray-400`
+                }`}>
+                  {autoSaveStatus.status === 'saving' && (
+                    <>
+                      <Loader className="w-3 h-3 animate-spin" />
+                      <span className="text-xs font-medium">Saving...</span>
+                    </>
+                  )}
+                  {autoSaveStatus.status === 'saved' && (
+                    <>
+                      <Check className="w-3 h-3" />
+                      <span className="text-xs font-medium">
+                        Saved {autoSaveStatus.lastSaved ? new Date(autoSaveStatus.lastSaved).toLocaleTimeString() : ''}
+                      </span>
+                    </>
+                  )}
+                  {autoSaveStatus.status === 'error' && (
+                    <>
+                      <AlertCircle className="w-3 h-3" />
+                      <span className="text-xs font-medium">Save Failed</span>
+                    </>
+                  )}
+                  {autoSaveStatus.status === 'idle' && autoSaveStatus.lastSaved && (
+                    <>
+                      <Check className="w-3 h-3 opacity-50" />
+                      <span className="text-xs font-medium opacity-75">Auto-save</span>
+                    </>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Removed redundant Save Config buttons - now only in Settings tab */}
@@ -1358,6 +1566,22 @@ function App() {
           {renderTabContent()}
         </div>
       </div>
+
+      {/* Toast Notification */}
+      {toastNotification.show && (
+        <div className={`fixed top-4 right-4 z-50 max-w-md p-4 rounded-lg shadow-lg transition-all duration-300 ${
+          toastNotification.type === 'success' ? 'bg-green-900/90 border border-green-700/50 text-green-200' :
+          toastNotification.type === 'error' ? 'bg-red-900/90 border border-red-700/50 text-red-200' :
+          'bg-blue-900/90 border border-blue-700/50 text-blue-200'
+        }`}>
+          <div className="flex items-center gap-3">
+            {toastNotification.type === 'success' && <Check className="w-5 h-5 text-green-400" />}
+            {toastNotification.type === 'error' && <AlertCircle className="w-5 h-5 text-red-400" />}
+            {toastNotification.type === 'info' && <Info className="w-5 h-5 text-blue-400" />}
+            <p className="text-sm font-medium">{toastNotification.message}</p>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
