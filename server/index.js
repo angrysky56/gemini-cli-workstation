@@ -69,6 +69,58 @@ function translateMcpConfig(standardConfig) {
 }
 // API Routes
 
+// Fetch available models from Google AI
+app.post('/api/models/list', async (req, res) => {
+  try {
+    const { apiKey } = req.body;
+    
+    if (!apiKey) {
+      return res.status(400).json({ error: 'API key is required' });
+    }
+    
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+      }
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error?.message || `HTTP error! status: ${response.status}`);
+    }
+
+    const data = await response.json();
+
+    // Filter for generation models and format them
+    const availableModels = data.models
+      ?.filter(model => model.supportedGenerationMethods?.includes('generateContent'))
+      ?.map(model => ({
+        id: model.name.replace('models/', ''),
+        name: model.displayName || model.name.replace('models/', ''),
+        description: model.description || 'No description available',
+        inputTokenLimit: model.inputTokenLimit || 'Unknown',
+        outputTokenLimit: model.outputTokenLimit || 'Unknown',
+        supportedGenerationMethods: model.supportedGenerationMethods || []
+      }))
+      ?.sort((a, b) => {
+        // Sort by model generation (2.5, 2.0, 1.5) and then by type
+        const getOrder = (name) => {
+          if (name.includes('2.5')) return 1;
+          if (name.includes('2.0')) return 2;
+          if (name.includes('1.5')) return 3;
+          return 4;
+        };
+        return getOrder(a.id) - getOrder(b.id);
+      }) || [];
+
+    res.json({ models: availableModels });
+  } catch (error) {
+    console.error('Error fetching models:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // List files and directories
 app.get('/api/files/list', async (req, res) => {
   try {

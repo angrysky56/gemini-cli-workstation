@@ -44,7 +44,7 @@ import {
 } from 'lucide-react';
 
 // API Configuration
-const API_BASE = import.meta.env.VITE_BACKEND_PORT 
+const API_BASE = import.meta.env.VITE_BACKEND_PORT
   ? `http://localhost:${import.meta.env.VITE_BACKEND_PORT}/api`
   : 'http://localhost:3001/api';
 // Icon component
@@ -52,7 +52,7 @@ const Icon = ({ name, className = "w-4 h-4" }) => {
   const icons = {
     Settings, Wrench, Server, FileCode, Info, ChevronRight, Save, Copy, Check,
     Trash2, PlusCircle, KeyRound, Terminal, Download, Upload, AlertCircle,
-    ExternalLink, Eye, EyeOff, FileEdit, RefreshCw, Home, FolderOpen, Cpu, Zap, 
+    ExternalLink, Eye, EyeOff, FileEdit, RefreshCw, Home, FolderOpen, Cpu, Zap,
     DollarSign, Send, ArrowRight, History, ChevronLeft, Search, FileText, AtSign,
     Hash, Command, X, Loader
   };
@@ -60,12 +60,13 @@ const Icon = ({ name, className = "w-4 h-4" }) => {
   return LucideIcon ? <LucideIcon className={className} /> : null;
 };
 
-// Default settings based on official Gemini CLI documentation
+// Default settings based on official Gemini CLI documentation-
+// A user is able to select the model from a list gotten from google as well.
 const defaultSettings = {
   theme: "Default",
   contextFileName: "GEMINI.md",
   selectedModel: "gemini-2.0-flash-exp", // Updated default model
-  baseFolderPath: "/home/ty/Repositories",
+  baseFolderPath: "", // Default to blank, user can set this
   autoAccept: false,
   sandbox: false,
   preferredEditor: "vscode",
@@ -84,7 +85,7 @@ const defaultSettings = {
   telemetry: {
     enabled: false,
     target: "local",
-    otlpEndpoint: "http://localhost:4317",
+    otlpEndpoint: "http://localhost:5173",
     logPrompts: true
   },
   usageStatisticsEnabled: true
@@ -95,7 +96,7 @@ const defaultEnvVars = {
   GEMINI_API_KEY: "",
   GEMINI_MODEL: "",
   GOOGLE_CLOUD_PROJECT: "",
-  GOOGLE_CLOUD_LOCATION: "us-central1",
+  GOOGLE_CLOUD_LOCATION: "",
   GOOGLE_GENAI_USE_VERTEXAI: "false"
 };
 
@@ -105,7 +106,7 @@ const api = {
     const response = await fetch(`${API_BASE}/projects`);
     return response.json();
   },
-  
+
   async saveConfig(projectPath, settings, envVars) {
     const response = await fetch(`${API_BASE}/config/save`, {
       method: 'POST',
@@ -114,12 +115,12 @@ const api = {
     });
     return response.json();
   },
-  
+
   async loadConfig(projectPath) {
     const response = await fetch(`${API_BASE}/config/load?projectPath=${encodeURIComponent(projectPath)}`);
     return response.json();
   },
-  
+
   async translateMcpConfig(standardConfig) {
     const response = await fetch(`${API_BASE}/mcp/translate`, {
       method: 'POST',
@@ -128,12 +129,12 @@ const api = {
     });
     return response.json();
   },
-  
+
   async getChatHistory(projectPath) {
     const response = await fetch(`${API_BASE}/chat/history?projectPath=${encodeURIComponent(projectPath)}`);
     return response.json();
   },
-  
+
   async saveChatMessage(projectPath, message) {
     const response = await fetch(`${API_BASE}/chat/message`, {
       method: 'POST',
@@ -142,7 +143,7 @@ const api = {
     });
     return response.json();
   },
-  
+
   async executeCommand(projectPath, command, settings, envVars) {
     const response = await fetch(`${API_BASE}/cli/execute`, {
       method: 'POST',
@@ -151,7 +152,7 @@ const api = {
     });
     return response.json();
   },
-  
+
   async createCliSession(projectPath, envVars) {
     const response = await fetch(`${API_BASE}/cli/session`, {
       method: 'POST',
@@ -197,7 +198,7 @@ const ProjectSelector = ({ currentProject, setCurrentProject, onProjectChange })
   const selectProject = async (project) => {
     setCurrentProject(project.path);
     setShowDropdown(false);
-    
+
     // Load project configuration
     if (onProjectChange) {
       const config = await api.loadConfig(project.path);
@@ -254,7 +255,7 @@ const ProjectSelector = ({ currentProject, setCurrentProject, onProjectChange })
               </button>
             ))
           )}
-          
+
           <button
             onClick={() => loadProjects()}
             className="w-full text-left px-3 py-2 hover:bg-gray-700 transition-colors border-t border-gray-700"
@@ -280,11 +281,11 @@ const McpConfigTranslator = ({ onTranslate }) => {
     "command": "uv",
     "args": [
       "--directory",
-      "/home/ty/Repositories/servers/src/sqlite",
+      "<your-sqlite-server-path>",
       "run",
       "mcp-server-sqlite",
       "--db-path",
-      "/home/ty/Repositories/ai_workspace/algorithm_platform/data/algo.db"
+      "<your-algo-db-path>"
     ]
   },
   "docker-mcp": {
@@ -418,7 +419,7 @@ const ChatInterface = ({ settings, setSettings, envVars, currentProject, setCurr
     // Get cursor position to check what was just typed
     const cursorPos = e.target.selectionStart;
     const textBeforeCursor = value.substring(0, cursorPos);
-    
+
     // Check for @ command (file selector)
     const atMatch = textBeforeCursor.match(/@([^\s]*)$/);
     if (atMatch) {
@@ -470,7 +471,7 @@ const ChatInterface = ({ settings, setSettings, envVars, currentProject, setCurr
       }
     } else if (e.key === 'Tab' && showCommandMenu) {
       e.preventDefault();
-      const filtered = commands.filter(cmd => 
+      const filtered = commands.filter(cmd =>
         cmd.cmd.toLowerCase().includes(commandSearch.toLowerCase())
       );
       if (filtered.length > 0) {
@@ -496,31 +497,51 @@ const ChatInterface = ({ settings, setSettings, envVars, currentProject, setCurr
     setSelectedHistoryIndex(-1);
 
     // Save to history
-    await api.saveChatMessage(currentProject, userMessage);
+    try {
+      await api.saveChatMessage(currentProject, userMessage);
+    } catch (error) {
+      console.error('Failed to save message to history:', error);
+    }
 
     try {
       const result = await api.executeCommand(currentProject, messageText, settings, envVars);
 
       if (result.success) {
+        // Parse the output to detect tool usage
+        const output = result.output || 'Command completed successfully';
+        let messageType = 'assistant';
+
+        // Check if this is a tool output
+        if (output.includes('Tool:') && output.includes('Status:')) {
+          messageType = 'tool';
+        }
+
         const aiResponse = {
-          type: 'assistant',
-          content: result.output || 'Command completed successfully',
+          type: messageType,
+          content: output,
           timestamp: new Date().toISOString()
         };
         setConversation(prev => [...prev, aiResponse]);
-        
+
         // Save AI response to history
-        await api.saveChatMessage(currentProject, aiResponse);
-        
+        try {
+          await api.saveChatMessage(currentProject, aiResponse);
+        } catch (error) {
+          console.error('Failed to save AI response to history:', error);
+        }
+
         // Reload history
         loadChatHistory();
       } else {
         throw new Error(result.error);
       }
     } catch (error) {
+      console.error('Command execution error:', error);
       const errorResponse = {
         type: 'error',
-        content: `Error: ${error.message}`,
+        content: error.message.includes('fetch failed')
+          ? 'Cannot connect to backend server. Please ensure the server is running on port 3001.'
+          : `Error: ${error.message}`,
         timestamp: new Date().toISOString()
       };
       setConversation(prev => [...prev, errorResponse]);
@@ -540,13 +561,13 @@ const ChatInterface = ({ settings, setSettings, envVars, currentProject, setCurr
     const cursorPos = inputRef.current.selectionStart;
     const textBeforeCursor = input.substring(0, cursorPos);
     const textAfterCursor = input.substring(cursorPos);
-    
+
     const atMatch = textBeforeCursor.match(/(.*)@[^\s]*$/);
     if (atMatch) {
       const newInput = atMatch[1] + '@' + filePath + ' ' + textAfterCursor;
       setInput(newInput);
       setShowFileSelector(false);
-      
+
       // Set cursor position after the inserted file path
       setTimeout(() => {
         const newPos = atMatch[1].length + filePath.length + 2;
@@ -587,6 +608,54 @@ const ChatInterface = ({ settings, setSettings, envVars, currentProject, setCurr
       return <div className="whitespace-pre-wrap">{message.content}</div>;
     }
 
+    // Check if this is a tool output message
+    if (message.type === 'tool' || (message.content && message.content.includes('Tool:') && message.content.includes('Status:'))) {
+      // Parse tool output
+      const lines = message.content.split('\n');
+      const toolInfo = {};
+      let outputContent = [];
+      let inOutput = false;
+
+      lines.forEach(line => {
+        if (line.startsWith('Tool:')) {
+          toolInfo.tool = line.replace('Tool:', '').trim();
+        } else if (line.startsWith('Status:')) {
+          toolInfo.status = line.replace('Status:', '').trim();
+        } else if (line.startsWith('Output:') || inOutput) {
+          inOutput = true;
+          if (line.startsWith('Output:')) {
+            outputContent.push(line.replace('Output:', '').trim());
+          } else {
+            outputContent.push(line);
+          }
+        }
+      });
+
+      return (
+        <div className="space-y-2">
+          {toolInfo.tool && (
+            <div className="flex items-center gap-2 text-xs text-gray-400">
+              <Icon name="Wrench" className="w-3 h-3" />
+              <span>Tool: {toolInfo.tool}</span>
+              {toolInfo.status && (
+                <>
+                  <span>•</span>
+                  <span className={toolInfo.status.toLowerCase().includes('success') ? 'text-green-400' : 'text-yellow-400'}>
+                    {toolInfo.status}
+                  </span>
+                </>
+              )}
+            </div>
+          )}
+          {outputContent.length > 0 && (
+            <div className="bg-gray-900/50 rounded-lg p-3 text-sm font-mono overflow-x-auto">
+              <pre className="whitespace-pre-wrap">{outputContent.join('\n')}</pre>
+            </div>
+          )}
+        </div>
+      );
+    }
+
     // For assistant messages, use markdown rendering
     return (
       <ReactMarkdown
@@ -608,6 +677,13 @@ const ChatInterface = ({ settings, setSettings, envVars, currentProject, setCurr
                 {children}
               </code>
             );
+          },
+          pre({ children }) {
+            return (
+              <div className="bg-gray-900/50 rounded-lg p-3 overflow-x-auto">
+                <pre className="text-sm">{children}</pre>
+              </div>
+            );
           }
         }}
       >
@@ -625,7 +701,7 @@ const ChatInterface = ({ settings, setSettings, envVars, currentProject, setCurr
             <Icon name="History" className="w-4 h-4" />
             Chat History
           </h3>
-          
+
           <div className="space-y-2 max-h-[calc(100vh-200px)] overflow-y-auto">
             {chatHistory.length === 0 ? (
               <p className="text-gray-500 text-sm">No history yet</p>
@@ -678,7 +754,7 @@ const ChatInterface = ({ settings, setSettings, envVars, currentProject, setCurr
               <Icon name="RefreshCw" className="w-5 h-5" />
             </button>
           </div>
-          
+
           {/* Working Folders */}
           <div className="mt-3 flex items-center gap-2 flex-wrap">
             <span className="text-xs text-gray-400">Working folders:</span>
@@ -686,8 +762,8 @@ const ChatInterface = ({ settings, setSettings, envVars, currentProject, setCurr
               <div
                 key={index}
                 className={`flex items-center gap-1 px-2 py-1 rounded text-xs ${
-                  folder === currentProject 
-                    ? 'bg-blue-600 text-white' 
+                  folder === currentProject
+                    ? 'bg-blue-600 text-white'
                     : 'bg-gray-700 text-gray-300 hover:bg-gray-600 cursor-pointer'
                 }`}
                 onClick={() => folder !== currentProject && setCurrentProject(folder)}
@@ -825,7 +901,7 @@ const ChatInterface = ({ settings, setSettings, envVars, currentProject, setCurr
                 className="w-full p-4 outline-none resize-none text-slate-800 placeholder-slate-500 disabled:opacity-50 bg-transparent"
                 rows="3"
               />
-              
+
               <div className="flex items-center justify-between px-4 pb-4">
                 <div className="flex items-center gap-4 text-xs text-slate-500">
                   <span>{input.length}/4000</span>
@@ -835,7 +911,7 @@ const ChatInterface = ({ settings, setSettings, envVars, currentProject, setCurr
                     <Icon name="Command" className="w-4 h-4" title="! for shell" />
                   </div>
                 </div>
-                
+
                 <button
                   onClick={() => sendMessage()}
                   disabled={isLoading || !input.trim()}
@@ -1069,8 +1145,8 @@ const MCPServers = ({ settings, setSettings }) => {
 const AuthenticationTab = ({ envVars, setEnvVars }) => {
   const [showApiKey, setShowApiKey] = useState(false);
   const [authMethod, setAuthMethod] = useState(
-    envVars.GEMINI_API_KEY ? 'api-key' : 
-    envVars.GOOGLE_CLOUD_PROJECT ? 'cloud-project' : 
+    envVars.GEMINI_API_KEY ? 'api-key' :
+    envVars.GOOGLE_CLOUD_PROJECT ? 'cloud-project' :
     'api-key'
   );
 
@@ -1078,7 +1154,7 @@ const AuthenticationTab = ({ envVars, setEnvVars }) => {
     <div className="flex-1 overflow-y-auto p-8">
       <div className="max-w-4xl mx-auto space-y-6">
         <h2 className="text-2xl font-semibold mb-6">Authentication Configuration</h2>
-        
+
         <div className="bg-blue-900/20 border border-blue-700/50 rounded-lg p-4">
           <p className="text-sm text-gray-300">
             Configure authentication for Gemini CLI. Choose between API Key or Google Cloud Project.
@@ -1191,15 +1267,15 @@ const SettingsTab = ({ settings, setSettings }) => {
     <div className="flex-1 overflow-y-auto p-8">
       <div className="max-w-4xl mx-auto space-y-6">
         <h2 className="text-2xl font-semibold mb-6">General Settings</h2>
-        
+
         <div className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-gray-300 mb-2">Base Folder Path</label>
             <input
               type="text"
-              value={settings.baseFolderPath || '/home/ty/Repositories'}
+              value={settings.baseFolderPath || ''}
               onChange={(e) => setSettings({...settings, baseFolderPath: e.target.value})}
-              placeholder="/home/ty/Repositories"
+              placeholder="/path/to/your/projects"
               className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white"
             />
             <p className="text-xs text-gray-400 mt-1">Default starting directory for file selection</p>
@@ -1270,7 +1346,7 @@ const SettingsTab = ({ settings, setSettings }) => {
             </div>
             <button
               onClick={() => setSettings({
-                ...settings, 
+                ...settings,
                 fileFiltering: {
                   ...settings.fileFiltering,
                   respectGitIgnore: !settings.fileFiltering.respectGitIgnore
@@ -1297,14 +1373,14 @@ const AboutTab = () => {
     <div className="flex-1 overflow-y-auto p-8">
       <div className="max-w-4xl mx-auto space-y-6">
         <h2 className="text-2xl font-semibold mb-6">About Gemini Workstation</h2>
-        
+
         <div className="bg-gray-800/50 border border-gray-600 rounded-lg p-6">
           <h3 className="text-lg font-semibold mb-4">Gemini CLI Web Interface</h3>
           <p className="text-gray-300 mb-4">
             A comprehensive web interface for Google's Gemini CLI, providing an intuitive way to configure
             and interact with the Gemini AI model.
           </p>
-          
+
           <div className="space-y-2 text-sm text-gray-400">
             <p><strong>Version:</strong> 1.0.0</p>
             <p><strong>Backend Port:</strong> 3001</p>
@@ -1319,11 +1395,11 @@ const AboutTab = () => {
             </ul>
           </div>
         </div>
-        
+
         <div className="bg-blue-900/20 border border-blue-700/50 rounded-lg p-4">
           <p className="text-sm text-gray-300">
             For more information about Gemini CLI, visit the{' '}
-            <a 
+            <a
               href="https://github.com/google/gemini-cli"
               target="_blank"
               rel="noopener noreferrer"
@@ -1340,7 +1416,7 @@ const AboutTab = () => {
 // Main App Component
 function App() {
   const [activeTab, setActiveTab] = useState('chat');
-  const [currentProject, setCurrentProject] = useState('/home/ty/Repositories/ai_workspace');
+  const [currentProject, setCurrentProject] = useState(""); // Start blank, user selects
   const [settings, setSettings] = useState(() => {
     const saved = localStorage.getItem('gemini-cli-settings');
     return saved ? JSON.parse(saved) : defaultSettings;
@@ -1494,9 +1570,9 @@ function App() {
       {/* Main Content */}
       <div className="flex-1 flex flex-col">
         {activeTab === 'chat' && (
-          <ChatInterface 
-            settings={settings} 
-            envVars={envVars} 
+          <ChatInterface
+            settings={settings}
+            envVars={envVars}
             currentProject={currentProject}
             setCurrentProject={setCurrentProject}
           />
@@ -1507,11 +1583,11 @@ function App() {
         )}
 
         {activeTab === 'models' && (
-          <ModelSelector 
-            settings={settings} 
-            setSettings={setSettings} 
-            envVars={envVars} 
-            setEnvVars={setEnvVars} 
+          <ModelSelector
+            settings={settings}
+            setSettings={setSettings}
+            envVars={envVars}
+            setEnvVars={setEnvVars}
           />
         )}
 
@@ -1551,52 +1627,33 @@ const ModelSelector = ({ settings, setSettings, envVars, setEnvVars }) => {
     setError(null);
 
     try {
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`, {
-        method: 'GET',
+      const response = await fetch(`${API_BASE}/models/list`, {
+        method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-        }
+        },
+        body: JSON.stringify({ apiKey })
       });
 
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+        const errorData = await response.json();
+        throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
       }
 
       const data = await response.json();
 
-      // Filter for generation models and format them
-      const availableModels = data.models
-        ?.filter(model => model.supportedGenerationMethods?.includes('generateContent'))
-        ?.map(model => ({
-          id: model.name.replace('models/', ''),
-          name: model.displayName || model.name.replace('models/', ''),
-          description: model.description || 'No description available',
-          inputTokenLimit: model.inputTokenLimit || 'Unknown',
-          outputTokenLimit: model.outputTokenLimit || 'Unknown',
-          supportedGenerationMethods: model.supportedGenerationMethods || []
-        }))
-        ?.sort((a, b) => {
-          // Sort by model generation (2.5, 2.0, 1.5) and then by type
-          const getOrder = (name) => {
-            if (name.includes('2.5')) return 1;
-            if (name.includes('2.0')) return 2;
-            if (name.includes('1.5')) return 3;
-            return 4;
-          };
-          return getOrder(a.id) - getOrder(b.id);
-        }) || [];
-
-      setModels(availableModels);
+      setModels(data.models || []);
       setLastFetch(new Date());
 
       // If no model is selected, set the first available model as default
-      if (!settings.selectedModel && availableModels.length > 0) {
-        const defaultModel = availableModels.find(m => m.id.includes('flash')) || availableModels[0];
+      if (!settings.selectedModel && data.models?.length > 0) {
+        const defaultModel = data.models.find(m => m.id.includes('flash')) || data.models[0];
         setSettings({ ...settings, selectedModel: defaultModel.id });
         setEnvVars({ ...envVars, GEMINI_MODEL: defaultModel.id });
       }
     } catch (err) {
       setError(err.message);
+      console.error('Error loading models:', err);
     } finally {
       setLoading(false);
     }
@@ -1632,7 +1689,7 @@ const ModelSelector = ({ settings, setSettings, envVars, setEnvVars }) => {
     <div className="flex-1 overflow-y-auto p-8">
       <div className="max-w-4xl mx-auto space-y-6">
         <h2 className="text-2xl font-semibold mb-6">Model Selection</h2>
-        
+
         <div className="bg-blue-900/20 border border-blue-700/50 rounded-lg p-4">
           <div className="flex items-center gap-2 mb-2">
             <Icon name="Info" className="text-blue-400" />
@@ -1740,7 +1797,7 @@ const FileSelector = ({ onSelect, currentPath, basePath, show, onClose, searchQu
   const [directories, setDirectories] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [currentDir, setCurrentDir] = useState(currentPath || basePath || '/home/ty');
+  const [currentDir, setCurrentDir] = useState(currentPath || basePath || '');
   const dropdownRef = useRef(null);
 
   useEffect(() => {
@@ -1764,16 +1821,27 @@ const FileSelector = ({ onSelect, currentPath, basePath, show, onClose, searchQu
     setError('');
     try {
       const response = await fetch(`${API_BASE}/files/list?path=${encodeURIComponent(path)}`);
+
+      if (!response.ok) {
+        const errorData = await response.text();
+        throw new Error(errorData.includes('<!DOCTYPE') ? 'Backend server not responding. Please ensure the server is running.' : errorData);
+      }
+
       const data = await response.json();
-      
+
       if (data.error) {
         throw new Error(data.error);
       }
-      
+
       setFiles(data.files || []);
       setDirectories(data.directories || []);
     } catch (err) {
-      setError(err.message);
+      console.error('Error loading directory:', err);
+      setError(err.message || 'Failed to load directory');
+      // If backend is not running, show helpful message
+      if (err.message.includes('Backend server not responding')) {
+        setError('Cannot connect to backend. Make sure the server is running on port 3001.');
+      }
     } finally {
       setLoading(false);
     }
@@ -1801,17 +1869,17 @@ const FileSelector = ({ onSelect, currentPath, basePath, show, onClose, searchQu
   };
 
   // Filter based on search query
-  const filteredFiles = files.filter(f => 
+  const filteredFiles = files.filter(f =>
     f.toLowerCase().includes(searchQuery.toLowerCase())
   );
-  const filteredDirs = directories.filter(d => 
+  const filteredDirs = directories.filter(d =>
     d.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
   if (!show) return null;
 
   return (
-    <div 
+    <div
       ref={dropdownRef}
       className="absolute bottom-full mb-2 left-0 right-0 bg-gray-800 border border-gray-600 rounded-lg shadow-lg max-h-96 overflow-hidden z-50"
     >
