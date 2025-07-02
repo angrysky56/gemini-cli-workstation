@@ -12,6 +12,8 @@ import {
 } from './ModernComponents';
 import { ModernChatInterface } from './ModernChatInterface';
 import FileUploadComponent from './FileUploadComponent';
+// Import string-argv for robust argument parsing
+import { parseArgsStringToArgv } from 'string-argv';
 
 import {
   Settings, Wrench, Server, FileCode, Info, ChevronRight, Save, Copy, Check,
@@ -34,7 +36,7 @@ const Icon = ({ name, className }) => {
   return IconComponent ? <IconComponent className={className} /> : null;
 };
 
-// MCP Config Translator Component  
+// MCP Config Translator Component
 const McpConfigTranslator = ({ onTranslate }) => {
   const [standardConfig, setStandardConfig] = useState('');
   const [translatedConfig, setTranslatedConfig] = useState('');
@@ -62,7 +64,7 @@ const McpConfigTranslator = ({ onTranslate }) => {
     setError('');
     try {
       const config = JSON.parse(standardConfig);
-      
+
       // Translate directly without API call
       const geminiConfig = {};
       for (const [name, serverConfig] of Object.entries(config)) {
@@ -75,7 +77,7 @@ const McpConfigTranslator = ({ onTranslate }) => {
           trust: serverConfig.trust || false
         };
       }
-      
+
       setTranslatedConfig(JSON.stringify(geminiConfig, null, 2));
       if (onTranslate) {
         onTranslate(geminiConfig);
@@ -139,10 +141,356 @@ const McpConfigTranslator = ({ onTranslate }) => {
   );
 };
 
+// Enhanced Project Management Component
+const ProjectManagementTab = ({ currentProject, setCurrentProject, onProjectChange, api, showToast }) => {
+  const [projects, setProjects] = useState([]);
+  const [managedProjects, setManagedProjects] = useState(() => {
+    const saved = localStorage.getItem('gemini-cli-managed-projects');
+    return saved ? JSON.parse(saved) : [];
+  });
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    loadProjects();
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem('gemini-cli-managed-projects', JSON.stringify(managedProjects));
+  }, [managedProjects]);
+
+  const loadProjects = async () => {
+    setLoading(true);
+    try {
+      const projectList = await api.getProjects();
+      setProjects(projectList);
+    } catch (error) {
+      console.error('Failed to load projects:', error);
+      showToast('Failed to load projects', 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const addToManagedProjects = (project) => {
+    if (!managedProjects.find(p => p.path === project.path)) {
+      setManagedProjects(prev => [...prev, project]);
+      showToast(`"${project.name}" added to managed projects`, 'success');
+    }
+  };
+
+  const clearFromProjects = (projectPath) => {
+    setManagedProjects(prev => prev.filter(p => p.path !== projectPath));
+    if (currentProject === projectPath) {
+      setCurrentProject('');
+    }
+    showToast('Project cleared from managed list', 'info');
+  };
+
+  const clearAllProjects = () => {
+    setManagedProjects([]);
+    setCurrentProject('');
+    showToast('All projects cleared from managed list', 'info');
+  };
+
+  const selectProject = async (project) => {
+    setCurrentProject(project.path);
+
+    if (onProjectChange) {
+      try {
+        const config = await api.loadConfig(project.path);
+        onProjectChange(project.path, config);
+        showToast(`Switched to "${project.name}"`, 'success');
+      } catch (error) {
+        console.error('Failed to load project config:', error);
+        showToast('Failed to load project configuration', 'error');
+      }
+    }
+  };
+
+  return (
+    <div className="flex-1 overflow-y-auto p-8">
+      <div className="max-w-4xl mx-auto space-y-6">
+        <h2 className="text-2xl font-semibold text-white mb-6">Project Management</h2>
+
+        {/* Current Project Section */}
+        {currentProject && (
+          <div className={`${colors.glass} rounded-xl p-6`}>
+            <h3 className="text-lg font-semibold text-white mb-4">Current Project</h3>
+            <div className="space-y-2 text-sm">
+              <div className="flex items-center gap-2">
+                <span className="text-gray-400">Path:</span>
+                <code className="bg-gray-800/50 px-2 py-1 rounded text-blue-400">{currentProject}</code>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-gray-400">Name:</span>
+                <span className="text-white">{currentProject.split('/').pop()}</span>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Managed Projects Section */}
+        <div className={`${colors.glass} rounded-xl p-6`}>
+          <div className="flex justify-between items-center mb-4">
+            <h3 className="text-lg font-semibold text-white">Managed Projects</h3>
+            <div className="flex gap-2">
+              <button
+                onClick={loadProjects}
+                disabled={loading}
+                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 text-white px-3 py-2 rounded-lg text-sm transition-colors"
+              >
+                <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+                Refresh
+              </button>
+              {managedProjects.length > 0 && (
+                <button
+                  onClick={clearAllProjects}
+                  className="flex items-center gap-2 bg-red-600 hover:bg-red-700 text-white px-3 py-2 rounded-lg text-sm transition-colors"
+                >
+                  <X className="w-4 h-4" />
+                  Clear All
+                </button>
+              )}
+            </div>
+          </div>
+
+          {managedProjects.length === 0 ? (
+            <div className="text-center py-8">
+              <FolderOpen className="w-12 h-12 text-gray-400 mx-auto mb-4" />
+              <p className="text-gray-400">No managed projects yet</p>
+              <p className="text-sm text-gray-500 mt-1">
+                Add projects from the available list below
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {managedProjects.map((project, index) => (
+                <div
+                  key={index}
+                  className={`border rounded-lg p-4 transition-all ${
+                    currentProject === project.path
+                      ? 'border-blue-500 bg-blue-900/20'
+                      : 'border-white/20 hover:border-white/40 bg-white/5 hover:bg-white/10'
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className={`w-3 h-3 rounded-full ${
+                        project.hasGeminiConfig ? 'bg-green-400' : 'bg-gray-500'
+                      }`} />
+                      <div>
+                        <h4 className="font-medium text-white">{project.name}</h4>
+                        <p className="text-sm text-gray-400">{project.type} project</p>
+                        <p className="text-xs text-gray-500 mt-1">{project.path}</p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      {currentProject === project.path && (
+                        <span className="bg-blue-600 text-white text-xs px-2 py-1 rounded-full">
+                          Active
+                        </span>
+                      )}
+
+                      <button
+                        onClick={() => selectProject(project)}
+                        disabled={currentProject === project.path}
+                        className="bg-green-600 hover:bg-green-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white px-3 py-1 rounded text-sm transition-colors"
+                      >
+                        {currentProject === project.path ? 'Selected' : 'Select'}
+                      </button>
+
+                      <button
+                        onClick={() => clearFromProjects(project.path)}
+                        className="bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded text-sm transition-colors"
+                        title="Remove from managed projects (does not delete the actual project)"
+                      >
+                        Clear
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Available Projects Section */}
+        <div className={`${colors.glass} rounded-xl p-6`}>
+          <h3 className="text-lg font-semibold text-white mb-4">Available Projects</h3>
+
+          {loading ? (
+            <div className="flex items-center justify-center py-8">
+              <Loader className="w-6 h-6 animate-spin text-blue-400" />
+              <span className="ml-2 text-gray-400">Loading projects...</span>
+            </div>
+          ) : projects.length === 0 ? (
+            <div className="text-center py-8">
+              <FolderOpen className="w-12 h-12 text-gray-400 mx-auto mb-4" />
+              <p className="text-gray-400">No projects found</p>
+              <p className="text-sm text-gray-500 mt-1">
+                Projects will be automatically discovered from your system
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-3 max-h-96 overflow-y-auto">
+              {projects.map((project, index) => {
+                const isManaged = managedProjects.find(p => p.path === project.path);
+
+                return (
+                  <div
+                    key={index}
+                    className="border border-white/20 rounded-lg p-4 hover:bg-white/5 transition-colors"
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className={`w-3 h-3 rounded-full ${
+                          project.hasGeminiConfig ? 'bg-green-400' : 'bg-gray-500'
+                        }`} />
+                        <div>
+                          <h4 className="font-medium text-white">{project.name}</h4>
+                          <p className="text-sm text-gray-400">{project.type} project</p>
+                          <p className="text-xs text-gray-500 mt-1">{project.path}</p>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        {project.hasGeminiConfig && (
+                          <span className="bg-green-600/20 text-green-400 text-xs px-2 py-1 rounded-full">
+                            Configured
+                          </span>
+                        )}
+
+                        {isManaged ? (
+                          <span className="bg-gray-600 text-gray-300 text-xs px-3 py-1 rounded">
+                            Added
+                          </span>
+                        ) : (
+                          <button
+                            onClick={() => addToManagedProjects(project)}
+                            className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded text-sm transition-colors"
+                          >
+                            Add to Managed
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// AddMcpServerForm component for adding new MCP servers
+const AddMcpServerForm = ({ newServer, setNewServer, addServer, setEditingServer, settings }) => (
+  <div className="bg-gray-800/50 border border-gray-600 rounded-lg p-4 space-y-4">
+    <h4 className="font-semibold text-blue-400">Add New MCP Server</h4>
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div>
+        <label className="block text-sm font-medium text-gray-300 mb-1">Server Name</label>
+        <input
+          type="text"
+          value={newServer.name}
+          onChange={(e) => setNewServer({ ...newServer, name: e.target.value })}
+          placeholder="myServer"
+          className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white"
+        />
+      </div>
+      <div>
+        <label className="block text-sm font-medium text-gray-300 mb-1">Command</label>
+        <input
+          type="text"
+          value={newServer.command}
+          onChange={(e) => setNewServer({ ...newServer, command: e.target.value })}
+          placeholder="uv"
+          className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white"
+        />
+      </div>
+      <div>
+        <label className="block text-sm font-medium text-gray-300 mb-1">Arguments (shell syntax)</label>
+        <input
+          type="text"
+          value={newServer.args}
+          onChange={(e) => setNewServer({ ...newServer, args: e.target.value })}
+          placeholder='--directory "/path/with spaces" run server.py'
+          className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white"
+        />
+        <p className="text-xs text-gray-400 mt-1">
+          Use shell syntax (quote arguments with spaces or commas, e.g. <code>"arg,with,comma"</code>)
+        </p>
+      </div>
+      <div>
+        <label className="block text-sm font-medium text-gray-300 mb-1">Working Directory</label>
+        <input
+          type="text"
+          value={newServer.cwd}
+          onChange={(e) => setNewServer({ ...newServer, cwd: e.target.value })}
+          placeholder={settings.baseFolderPath || "./mcp_servers/python"}
+          className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white"
+        />
+        <p className="text-xs text-gray-400 mt-1">
+          Defaults to Base Allowed Folder if not specified
+        </p>
+      </div>
+      <div>
+        <label className="block text-sm font-medium text-gray-300 mb-1">Timeout (ms)</label>
+        <input
+          type="number"
+          value={newServer.timeout}
+          onChange={(e) => setNewServer({ ...newServer, timeout: parseInt(e.target.value) || 600000 })}
+          className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white"
+        />
+      </div>
+    </div>
+    <div>
+      <label className="block text-sm font-medium text-gray-300 mb-1">Environment Variables (JSON)</label>
+      <textarea
+        value={newServer.env}
+        onChange={(e) => setNewServer({ ...newServer, env: e.target.value })}
+        placeholder='{"API_KEY": "$MY_TOKEN"}'
+        rows="2"
+        className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white font-mono text-sm"
+      />
+    </div>
+    <div className="flex items-center gap-3">
+      <input
+        type="checkbox"
+        id="trust"
+        checked={newServer.trust}
+        onChange={(e) => setNewServer({ ...newServer, trust: e.target.checked })}
+        className="rounded bg-gray-700 border-gray-600 text-blue-600"
+      />
+      <label htmlFor="trust" className="text-sm text-gray-300">
+        Trust this server (bypass confirmations)
+      </label>
+    </div>
+    <div className="flex gap-3">
+      <button
+        onClick={addServer}
+        className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg transition-colors"
+      >
+        Add Server
+      </button>
+      <button
+        onClick={() => setEditingServer(null)}
+        className="bg-gray-600 hover:bg-gray-700 text-white px-4 py-2 rounded-lg transition-colors"
+      >
+        Cancel
+      </button>
+    </div>
+  </div>
+);
+
 // MCP Servers Component
-const MCPServers = ({ settings, setSettings }) => {
+const MCPServers = ({ settings, setSettings, api, showToast }) => {
   const [editingServer, setEditingServer] = useState(null);
   const [showTranslator, setShowTranslator] = useState(false);
+  const [serverConnections, setServerConnections] = useState({});
   const [newServer, setNewServer] = useState({
     name: '',
     command: '',
@@ -166,10 +514,14 @@ const MCPServers = ({ settings, setSettings }) => {
       }
     }
 
+    // Default working directory to base allowed folder if not specified
+    const defaultCwd = newServer.cwd || settings.baseFolderPath || undefined;
+
     const serverConfig = {
       command: newServer.command,
-      args: newServer.args ? newServer.args.split(',').map(s => s.trim()).filter(s => s) : [],
-      cwd: newServer.cwd || undefined,
+      // Use string-argv for robust argument parsing (handles quoted strings and spaces)
+      args: newServer.args ? parseArgsStringToArgv(newServer.args) : [],
+      cwd: defaultCwd,
       timeout: newServer.timeout,
       trust: newServer.trust,
       env: envVars
@@ -183,6 +535,12 @@ const MCPServers = ({ settings, setSettings }) => {
       }
     }));
 
+    // Initialize connection state
+    setServerConnections(prev => ({
+      ...prev,
+      [newServer.name]: { connected: false, connecting: false }
+    }));
+
     setNewServer({
       name: '',
       command: '',
@@ -193,7 +551,7 @@ const MCPServers = ({ settings, setSettings }) => {
       env: ''
     });
     setEditingServer(null);
-    
+
     // Show success notification
     showToast(`MCP server "${newServer.name}" added successfully!`, 'success');
   };
@@ -204,10 +562,73 @@ const MCPServers = ({ settings, setSettings }) => {
       delete newServers[serverName];
       return { ...prevSettings, mcpServers: newServers };
     });
-    
+
+    // Remove connection state
+    setServerConnections(prev => {
+      const newConnections = { ...prev };
+      delete newConnections[serverName];
+      return newConnections;
+    });
+
     // Show success notification
     showToast(`MCP server "${serverName}" removed successfully!`, 'success');
   };
+
+  // Toggle server trust setting
+  const toggleServerTrust = (serverName) => {
+    const currentTrust = settings.mcpServers[serverName]?.trust ?? false;
+    const newTrustState = !currentTrust;
+
+    setSettings(prevSettings => ({
+      ...prevSettings,
+      mcpServers: {
+        ...prevSettings.mcpServers,
+        [serverName]: {
+          ...prevSettings.mcpServers[serverName],
+          trust: newTrustState
+        }
+      }
+    }));
+
+    showToast(`MCP server "${serverName}" ${newTrustState ? 'trusted' : 'untrusted'}`, 'success');
+  };
+
+  // Toggle server connection (through Gemini CLI)
+  const toggleServerConnection = async (serverName) => {
+    const currentState = serverConnections[serverName];
+
+    if (currentState?.connected) {
+      // Disable server in Gemini CLI config
+      setServerConnections(prev => ({
+        ...prev,
+        [serverName]: { connected: false, connecting: false }
+      }));
+      showToast(`Disabled "${serverName}" in Gemini CLI config`, 'info');
+    } else {
+      // Enable server in Gemini CLI config
+      setServerConnections(prev => ({
+        ...prev,
+        [serverName]: { connected: true, connecting: false }
+      }));
+      showToast(`Enabled "${serverName}" in Gemini CLI config`, 'success');
+    }
+  };
+
+  // Check Gemini CLI MCP status
+  const loadServerStatuses = async () => {
+    // For now, just check if servers are configured
+    const statuses = {};
+    Object.keys(settings.mcpServers || {}).forEach(serverName => {
+      statuses[serverName] = serverConnections[serverName] || { connected: false, connecting: false };
+    });
+    setServerConnections(statuses);
+  };
+
+  // Load statuses on mount and when mcpServers changes
+  useEffect(() => {
+    loadServerStatuses();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [Object.keys(settings.mcpServers).join(',')]);
 
   const handleTranslatedConfig = (geminiConfig) => {
     setSettings(prevSettings => ({
@@ -230,10 +651,10 @@ const MCPServers = ({ settings, setSettings }) => {
         try {
           const text = await file.text();
           const config = JSON.parse(text);
-          
+
           // Handle different config formats
           let mcpServers = {};
-          
+
           if (config.mcpServers) {
             // Gemini CLI format
             mcpServers = config.mcpServers;
@@ -253,7 +674,7 @@ const MCPServers = ({ settings, setSettings }) => {
               };
             }
           }
-          
+
           // Merge with existing servers
           setSettings(prevSettings => ({
             ...prevSettings,
@@ -262,7 +683,7 @@ const MCPServers = ({ settings, setSettings }) => {
               ...mcpServers
             }
           }));
-          
+
           showToast(`Successfully imported ${Object.keys(mcpServers).length} MCP server(s)!`, 'success');
         } catch (error) {
           showToast(`Failed to import MCP configuration: ${error.message}`, 'error');
@@ -306,128 +727,104 @@ const MCPServers = ({ settings, setSettings }) => {
           <McpConfigTranslator onTranslate={handleTranslatedConfig} />
         </div>
       )}
-
       {editingServer === 'new' && (
-        <div className="bg-gray-800/50 border border-gray-600 rounded-lg p-4 space-y-4">
-          <h4 className="font-semibold text-blue-400">Add New MCP Server</h4>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-300 mb-1">Server Name</label>
-              <input
-                type="text"
-                value={newServer.name}
-                onChange={(e) => setNewServer({...newServer, name: e.target.value})}
-                placeholder="myServer"
-                className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-300 mb-1">Command</label>
-              <input
-                type="text"
-                value={newServer.command}
-                onChange={(e) => setNewServer({...newServer, command: e.target.value})}
-                placeholder="python, node, docker, uv, uvx"
-                className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-300 mb-1">Arguments (comma-separated)</label>
-              <input
-                type="text"
-                value={newServer.args}
-                onChange={(e) => setNewServer({...newServer, args: e.target.value})}
-                placeholder="--directory, /path/to/server, run, server.py"
-                className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-300 mb-1">Working Directory</label>
-              <input
-                type="text"
-                value={newServer.cwd}
-                onChange={(e) => setNewServer({...newServer, cwd: e.target.value})}
-                placeholder="./mcp_servers/python"
-                className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-300 mb-1">Timeout (ms)</label>
-              <input
-                type="number"
-                value={newServer.timeout}
-                onChange={(e) => setNewServer({...newServer, timeout: parseInt(e.target.value) || 600000})}
-                className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white"
-              />
-            </div>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">Environment Variables (JSON)</label>
-            <textarea
-              value={newServer.env}
-              onChange={(e) => setNewServer({...newServer, env: e.target.value})}
-              placeholder='{"API_KEY": "$MY_TOKEN"}'
-              rows="2"
-              className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white font-mono text-sm"
-            />
-          </div>
-          <div className="flex items-center gap-3">
-            <input
-              type="checkbox"
-              id="trust"
-              checked={newServer.trust}
-              onChange={(e) => setNewServer({...newServer, trust: e.target.checked})}
-              className="rounded bg-gray-700 border-gray-600 text-blue-600"
-            />
-            <label htmlFor="trust" className="text-sm text-gray-300">
-              Trust this server (bypass confirmations)
-            </label>
-          </div>
-          <div className="flex gap-3">
-            <button
-              onClick={addServer}
-              className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg transition-colors"
-            >
-              Add Server
-            </button>
-            <button
-              onClick={() => setEditingServer(null)}
-              className="bg-gray-600 hover:bg-gray-700 text-white px-4 py-2 rounded-lg transition-colors"
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
+        <AddMcpServerForm
+          newServer={newServer}
+          setNewServer={setNewServer}
+          addServer={addServer}
+          setEditingServer={setEditingServer}
+          settings={settings}
+        />
       )}
 
       <div className="space-y-4">
-        {Object.entries(settings.mcpServers || {}).map(([name, config]) => (
-          <div key={name} className="bg-gray-800/50 border border-gray-600 rounded-lg p-4">
-            <div className="flex justify-between items-start mb-3">
-              <h4 className="font-semibold text-blue-400">{name}</h4>
-              <button
-                onClick={() => removeServer(name)}
-                className="text-red-400 hover:text-red-300 transition-colors"
-              >
-                <Icon name="Trash2" className="w-4 h-4" />
-              </button>
+        {Object.entries(settings.mcpServers || {}).map(([name, config]) => {
+          const connectionState = serverConnections[name] || { connected: false, connecting: false };
+
+          return (
+            <div key={name} className="bg-gray-800/50 border border-gray-600 rounded-lg p-4">
+              <div className="flex justify-between items-start mb-3">
+                <div className="flex items-center gap-3">
+                  <h4 className="font-semibold text-blue-400">{name}</h4>
+
+                  {/* Configuration Status Indicator */}
+                  <div className={`flex items-center gap-1 px-2 py-1 rounded-full text-xs ${
+                    connectionState.connected ? 'bg-green-900/20 text-green-400' : 'bg-gray-700/50 text-gray-400'
+                  }`}>
+                    <div className={`w-2 h-2 rounded-full ${
+                      connectionState.connected ? 'bg-green-400' : 'bg-gray-400'
+                    }`} />
+                    <span>
+                      {connectionState.connected ? 'Enabled' : 'Disabled'}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  {/* Trust Toggle */}
+                  <button
+                    onClick={() => toggleServerTrust(name)}
+                    className={`flex items-center gap-1 px-3 py-1 rounded-lg text-xs font-medium transition-colors ${
+                      config.trust
+                        ? 'bg-green-600/20 text-green-400 hover:bg-green-600/30'
+                        : 'bg-gray-600/20 text-gray-400 hover:bg-gray-600/30'
+                    }`}
+                    title={config.trust ? 'Click to untrust' : 'Click to trust'}
+                  >
+                    {config.trust ? '🔓' : '🔒'}
+                    {config.trust ? 'Trusted' : 'Untrusted'}
+                  </button>
+
+                  {/* Enable/Disable Toggle */}
+                  <button
+                    onClick={() => toggleServerConnection(name)}
+                    disabled={connectionState.connecting}
+                    className={`flex items-center gap-1 px-3 py-1 rounded-lg text-xs font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                      connectionState.connected
+                        ? 'bg-green-600/20 text-green-400 hover:bg-green-600/30'
+                        : 'bg-gray-600/20 text-gray-400 hover:bg-gray-600/30'
+                    }`}
+                  >
+                    {connectionState.connected ? (
+                      <>
+                        <Check className="w-3 h-3" />
+                        Enabled
+                      </>
+                    ) : (
+                      <>
+                        <X className="w-3 h-3" />
+                        Disabled
+                      </>
+                    )}
+                  </button>
+
+                  {/* Remove Server */}
+                  <button
+                    onClick={() => removeServer(name)}
+                    className="text-red-400 hover:text-red-300 transition-colors p-1"
+                    title="Remove server"
+                  >
+                    <Icon name="Trash2" className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+
+              <div className="text-sm space-y-1">
+                <p><span className="text-gray-400">Command:</span> <code className="bg-gray-700 px-2 py-1 rounded">{config.command}</code></p>
+                {config.args?.length > 0 && (
+                  <p><span className="text-gray-400">Args:</span> <code className="bg-gray-700 px-2 py-1 rounded">{config.args.join(' ')}</code></p>
+                )}
+                {config.cwd && (
+                  <p><span className="text-gray-400">Working Dir:</span> <code className="bg-gray-700 px-2 py-1 rounded">{config.cwd}</code></p>
+                )}
+                <p><span className="text-gray-400">Timeout:</span> {config.timeout}ms</p>
+                {Object.keys(config.env || {}).length > 0 && (
+                  <p><span className="text-gray-400">Environment:</span> <code className="bg-gray-700 px-2 py-1 rounded text-xs">{JSON.stringify(config.env)}</code></p>
+                )}
+              </div>
             </div>
-            <div className="text-sm space-y-1">
-              <p><span className="text-gray-400">Command:</span> <code className="bg-gray-700 px-2 py-1 rounded">{config.command}</code></p>
-              {config.args?.length > 0 && (
-                <p><span className="text-gray-400">Args:</span> <code className="bg-gray-700 px-2 py-1 rounded">{config.args.join(' ')}</code></p>
-              )}
-              {config.cwd && (
-                <p><span className="text-gray-400">CWD:</span> <code className="bg-gray-700 px-2 py-1 rounded">{config.cwd}</code></p>
-              )}
-              <p><span className="text-gray-400">Timeout:</span> {config.timeout}ms</p>
-              <p><span className="text-gray-400">Trusted:</span> {config.trust ? '✅' : '❌'}</p>
-              {Object.keys(config.env || {}).length > 0 && (
-                <p><span className="text-gray-400">Env:</span> <code className="bg-gray-700 px-2 py-1 rounded">{JSON.stringify(config.env)}</code></p>
-              )}
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
@@ -903,7 +1300,7 @@ function App() {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [currentProject, setCurrentProject] = useState("");
   const [serverHealth, setServerHealth] = useState(false);
-  
+
   // Enhanced autosave state management
   const [autoSaveStatus, setAutoSaveStatus] = useState({
     status: 'idle', // 'idle', 'saving', 'saved', 'error'
@@ -974,7 +1371,7 @@ function App() {
     const autoSave = async () => {
       if (currentProject && settings && envVars) {
         setAutoSaveStatus(prev => ({ ...prev, status: 'saving' }));
-        
+
         try {
           await api.saveConfig(currentProject, settings, envVars);
           setAutoSaveStatus({
@@ -983,12 +1380,12 @@ function App() {
             error: null
           });
           console.log('Configuration auto-saved to project:', currentProject);
-          
+
           // Reset status after 3 seconds
           setTimeout(() => {
             setAutoSaveStatus(prev => ({ ...prev, status: 'idle' }));
           }, 3000);
-          
+
         } catch (error) {
           console.error('Auto-save failed:', error);
           setAutoSaveStatus({
@@ -996,10 +1393,10 @@ function App() {
             lastSaved: null,
             error: error.message
           });
-          
+
           // Show toast notification for error
           showToast(`Auto-save failed: ${error.message}`, 'error');
-          
+
           // Try to retry after 5 seconds
           setTimeout(async () => {
             try {
@@ -1043,12 +1440,12 @@ function App() {
         error: null
       });
       showToast('Configuration saved successfully to project!', 'success');
-      
+
       // Reset status after 3 seconds
       setTimeout(() => {
         setAutoSaveStatus(prev => ({ ...prev, status: 'idle' }));
       }, 3000);
-      
+
     } catch (error) {
       setAutoSaveStatus({
         status: 'error',
@@ -1113,34 +1510,13 @@ function App() {
 
       case 'projects':
         return (
-          <div className="flex-1 p-8">
-            <div className="max-w-4xl mx-auto space-y-6">
-              <h2 className="text-2xl font-semibold text-white mb-6">Project Management</h2>
-
-              <ProjectSelector
-                currentProject={currentProject}
-                setCurrentProject={setCurrentProject}
-                onProjectChange={handleProjectChange}
-                className="max-w-md"
-              />
-
-              {currentProject && (
-                <div className={`${colors.glass} rounded-xl p-6`}>
-                  <h3 className="text-lg font-semibold text-white mb-4">Current Project</h3>
-                  <div className="space-y-2 text-sm">
-                    <div className="flex items-center gap-2">
-                      <span className="text-gray-400">Path:</span>
-                      <code className="bg-gray-800/50 px-2 py-1 rounded text-blue-400">{currentProject}</code>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-gray-400">Name:</span>
-                      <span className="text-white">{currentProject.split('/').pop()}</span>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
+          <ProjectManagementTab
+            currentProject={currentProject}
+            setCurrentProject={setCurrentProject}
+            onProjectChange={handleProjectChange}
+            api={api}
+            showToast={showToast}
+          />
         );
 
       case 'tools':
@@ -1148,7 +1524,7 @@ function App() {
           <div className="flex-1 overflow-y-auto p-8">
             <div className="max-w-4xl mx-auto">
               <h2 className="text-2xl font-semibold mb-6">Tools & MCP Configuration</h2>
-              <MCPServers settings={settings} setSettings={setSettings} />
+              <MCPServers settings={settings} setSettings={setSettings} api={api} showToast={showToast} />
             </div>
           </div>
         );
@@ -1165,7 +1541,7 @@ function App() {
                   <Info className="w-5 h-5 text-blue-400" />
                   <h3 className="font-semibold text-blue-400">Primary Authentication</h3>
                 </div>
-                
+
                 <div>
                   <label className="block text-sm font-medium text-gray-300 mb-2">
                     Gemini API Key
@@ -1329,14 +1705,17 @@ function App() {
 
               <div className={`${colors.glass} rounded-xl p-6 space-y-6`}>
                 <div>
-                  <label className="block text-sm font-medium text-gray-300 mb-2">Base Folder Path</label>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">Base Allowed Folder</label>
                   <input
                     type="text"
                     value={settings.baseFolderPath || ''}
                     onChange={(e) => setSettings({...settings, baseFolderPath: e.target.value})}
-                    placeholder="/path/to/your/projects"
+                    placeholder="/home/ty/Repositories"
                     className="w-full bg-gray-900/50 border border-white/20 rounded-lg px-4 py-3 text-white placeholder-gray-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
                   />
+                  <p className="text-xs text-gray-400 mt-1">
+                    Default folder for projects and MCP server working directories. Leave empty to allow all paths.
+                  </p>
                 </div>
 
                 <div>
@@ -1451,7 +1830,7 @@ function App() {
                   </button>
                 </div>
                 <p className="text-xs text-gray-400 mt-3">
-                  {currentProject 
+                  {currentProject
                     ? `Configuration will be saved to: ${currentProject}/.gemini/settings.json`
                     : 'Select a project to save configuration'
                   }

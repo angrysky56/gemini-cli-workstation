@@ -2,7 +2,8 @@
 
 A comprehensive web interface for Google's Gemini CLI with full feature support, including chat history, project management, MCP server configuration, and command support.
 
-> **Status**: Production Ready - Fully polished and aligned with official Gemini CLI documentation
+> **Status**: Production Ready - Fully polished and aligned with official Gemini CLI documentation-
+# This is actually bullshit now. Claude Desktop is currently ruined for coding due to Anthropic's push for their absurd "Artifact Sharing"- Claude will rip the guts out of any project and return a demo version no matter how obvious that is not what you are doing.
 
 ![alt text](image.png)
 

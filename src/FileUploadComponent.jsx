@@ -2,7 +2,7 @@
 // Modern file upload with drag & drop support for gemini-cli integration
 
 import React, { useState, useRef, useCallback } from 'react';
-import { Upload, X, FileText, Image, File, CheckCircle } from 'lucide-react';
+import { Upload, X, FileText, Image, File, CheckCircle, Folder } from 'lucide-react';
 import { colors, GlassCard } from './ModernComponents';
 
 export const FileUploadComponent = ({ onFilesSelected, className = "" }) => {
@@ -226,19 +226,22 @@ export const FileSelector = ({
   searchQuery,
   onSelect,
   onClose,
-  uploadedFiles = []
+  uploadedFiles
 }) => {
+  // Hide the file selector when 'show' is false (controlled by parent component)
   if (!show) return null;
+  const safeUploadedFiles = Array.isArray(uploadedFiles) ? uploadedFiles : [];
 
-  // File structure for directory navigation and uploaded files
   const mockFiles = [
     { name: 'README.md', type: 'file', path: 'README.md' },
     { name: 'package.json', type: 'file', path: 'package.json' },
     { name: 'src/', type: 'directory', path: 'src' },
     { name: 'docs/', type: 'directory', path: 'docs' },
-    ...uploadedFiles.map(file => ({
+    ...safeUploadedFiles.map(file => ({
       name: file.name,
-      type: 'file',
+      type: file.file && typeof file.file.webkitRelativePath === 'string' && file.file.webkitRelativePath.endsWith('/')
+        ? 'directory'
+        : 'file',
       path: file.path,
       isUploaded: true
     }))
@@ -248,6 +251,8 @@ export const FileSelector = ({
     file.name.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
+  // NOTE: This selector uses absolute positioning. If used in a scrollable container, this may cause overflow issues.
+  // Consider making the positioning strategy configurable or document its requirements.
   return (
     <div className="absolute bottom-full mb-2 w-full bg-gray-800 border border-gray-600 rounded-lg shadow-lg max-h-60 overflow-y-auto z-50">
       <div className="p-2 border-b border-gray-700">
@@ -259,10 +264,10 @@ export const FileSelector = ({
           No files found matching "{searchQuery}"
         </div>
       ) : (
-        filteredFiles.map((file, index) => (
+        filteredFiles.map((file) => (
           <button
-            key={index}
-            onClick={() => onSelect(file.path)}
+            key={file.path}
+            onClick={() => onSelect(file)}
             className="w-full text-left px-3 py-2 hover:bg-gray-700 transition-colors flex items-center gap-2"
           >
             {file.type === 'directory' ? (
@@ -280,5 +285,4 @@ export const FileSelector = ({
     </div>
   );
 };
-
 export default FileUploadComponent;
