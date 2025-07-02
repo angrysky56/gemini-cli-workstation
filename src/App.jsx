@@ -847,7 +847,8 @@ const api = {
     const response = await fetch(`${API_BASE}/config/save`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ projectPath, settings, envVars })
+      // Backend expects `env`, not `envVars` in the body for the .env file content
+      body: JSON.stringify({ projectPath, settings, env: envVars })
     });
     if (!response.ok) throw new Error('Failed to save configuration');
     return response.json();
@@ -1350,8 +1351,9 @@ function App() {
     if (config?.settings) {
       setSettings(prev => ({ ...prev, ...config.settings }));
     }
-    if (config?.envVars) {
-      setEnvVars(prev => ({ ...prev, ...config.envVars }));
+    // Backend sends `config.env`, frontend state is `envVars`
+    if (config?.env) {
+      setEnvVars(prev => ({ ...prev, ...config.env }));
     }
   };
 
