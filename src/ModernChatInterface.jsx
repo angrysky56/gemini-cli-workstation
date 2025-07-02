@@ -62,15 +62,20 @@ export const ModernChatInterface = ({
     { cmd: '/quit', desc: 'Exit Gemini CLI' }
   ];
 
-  // Load chat history and uploaded files when component mounts
+  // Load chat history and uploaded files when component mounts or currentProject changes
   useEffect(() => {
-    loadChatHistory();
-    loadUploadedFiles();
+    if (currentProject) {
+      loadChatHistory(currentProject);
+      loadUploadedFiles(currentProject);
+    } else {
+      setChatHistory([]);
+      setUploadedFiles([]);
+    }
     // Initialize working folders with base folder path if available
     if (settings.baseFolderPath && !workingFolders.includes(settings.baseFolderPath)) {
       setWorkingFolders(prev => [...prev, settings.baseFolderPath]);
     }
-  }, [settings.baseFolderPath]);
+  }, [currentProject, settings.baseFolderPath]);
 
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
@@ -92,25 +97,31 @@ export const ModernChatInterface = ({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const loadChatHistory = async () => {
-    const contextPath = settings.baseFolderPath || 'global';
-
+  const loadChatHistory = async (projectPath) => {
+    if (!projectPath) {
+      setChatHistory([]);
+      return;
+    }
     try {
-      const result = await api.getChatHistory(contextPath);
+      const result = await api.getChatHistory(projectPath);
       setChatHistory(result.history || []);
     } catch (error) {
       console.error('Failed to load chat history:', error);
+      setChatHistory([]); // Clear history on error
     }
   };
 
-  const loadUploadedFiles = async () => {
-    const contextPath = settings.baseFolderPath || 'global';
-
+  const loadUploadedFiles = async (projectPath) => {
+    if (!projectPath) {
+      setUploadedFiles([]);
+      return;
+    }
     try {
-      const result = await api.getUploadedFiles(contextPath);
+      const result = await api.getUploadedFiles(projectPath);
       setUploadedFiles(result.files || []);
     } catch (error) {
       console.error('Failed to load uploaded files:', error);
+      setUploadedFiles([]); // Clear files on error
     }
   };
 
@@ -190,7 +201,10 @@ export const ModernChatInterface = ({
   const sendMessage = async (messageText = input) => {
     if (!messageText.trim() || isLoading) return;
 
-    const contextPath = settings.baseFolderPath || 'global';
+    // projectPath for command execution can be currentProject or fallback to settings.baseFolderPath or even undefined for global commands
+    // However, for saving history, it strictly needs currentProject.
+    const executionProjectPath = currentProject || settings.baseFolderPath;
+
     const userMessage = {
       type: 'user',
       content: messageText,
@@ -204,15 +218,20 @@ export const ModernChatInterface = ({
     setShowFileSelector(false);
     setSelectedHistoryIndex(-1);
 
-    // Save user message to history
-    try {
-      await api.saveChatMessage(contextPath, userMessage);
-    } catch (error) {
-      console.error('Failed to save message to history:', error);
+    // Save user message to history only if currentProject is set
+    if (currentProject) {
+      try {
+        await api.saveChatMessage(currentProject, userMessage);
+      } catch (error) {
+        console.error('Failed to save user message to history:', error);
+      }
+    } else {
+      console.warn('User message not saved to history: No current project selected.');
     }
 
     try {
-      const result = await api.executeCommand(contextPath, messageText, settings, envVars);
+      // Execute command using executionProjectPath (could be undefined if no project/base folder)
+      const result = await api.executeCommand(executionProjectPath, messageText, settings, envVars);
 
       const output = result.output || 'Command completed successfully';
       let messageType = 'assistant';
@@ -233,13 +252,16 @@ export const ModernChatInterface = ({
 
       setConversation(prev => [...prev, aiResponse]);
 
-      // Save AI response to history
-      try {
-        const contextPath = settings.baseFolderPath || 'global';
-        await api.saveChatMessage(contextPath, aiResponse);
-        loadChatHistory(); // Refresh history
-      } catch (error) {
-        console.error('Failed to save AI response to history:', error);
+      // Save AI response to history only if currentProject is set
+      if (currentProject) {
+        try {
+          await api.saveChatMessage(currentProject, aiResponse);
+          loadChatHistory(currentProject); // Refresh history for the current project
+        } catch (error) {
+          console.error('Failed to save AI response to history:', error);
+        }
+      } else {
+        console.warn('AI response not saved to history: No current project selected.');
       }
 
     } catch (error) {
@@ -283,17 +305,25 @@ export const ModernChatInterface = ({
   };
 
   const handleFilesUploaded = async (files) => {
+    if (!currentProject) {
+      alert('Please select a project first before uploading files.');
+      console.warn('File upload attempted without a selected project.');
+      return;
+    }
+
     try {
       const fileList = files.map(f => f.file || f).filter(Boolean);
       if (fileList.length === 0) return;
 
-      const contextPath = settings.baseFolderPath || 'global';
-      const result = await api.uploadFiles(contextPath, fileList);
-      setUploadedFiles(prev => [...prev, ...result.files]);
+      const result = await api.uploadFiles(currentProject, fileList);
+      // Assuming api.uploadFiles returns files associated with the project,
+      // and loadUploadedFiles will refresh this from the project context.
+      loadUploadedFiles(currentProject); // Refresh the list of uploaded files for the current project
       setShowUpload(false);
 
       // Optionally insert @ commands for uploaded files
-      const atCommands = result.files.map(f => f.atCommand).join(' ');
+      // The `result.files` should contain paths relative to the project or recognizable by @-mention
+      const atCommands = result.files.map(f => `@${f.name}`).join(' '); // Using f.name as a placeholder for usable @-reference
       if (atCommands) {
         setInput(prev => prev + (prev ? ' ' : '') + atCommands + ' ');
       }
@@ -312,13 +342,18 @@ export const ModernChatInterface = ({
     setConversation([]);
     setSelectedHistoryIndex(-1);
 
-    // Optionally clear server-side history too
-    try {
-      const contextPath = settings.baseFolderPath || 'global';
-      await api.clearChatHistory(contextPath);
+    // Optionally clear server-side history too, only if a project is selected
+    if (currentProject) {
+      try {
+        await api.clearChatHistory(currentProject);
+        setChatHistory([]); // Clear local state as well
+      } catch (error) {
+        console.error('Failed to clear server history:', error);
+      }
+    } else {
+      // If no project, just clear the live conversation, local history is already empty
       setChatHistory([]);
-    } catch (error) {
-      console.error('Failed to clear server history:', error);
+      console.warn('Server history not cleared: No current project selected.');
     }
   };
 

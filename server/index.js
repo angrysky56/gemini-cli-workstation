@@ -357,8 +357,9 @@ app.post('/api/cli/execute', async (req, res) => {
       NODE_NO_WARNINGS: '1'
     };
     
-    // Always use Gemini CLI in non-interactive mode with -p flag
-    const finalCommand = `gemini -p "${command.replace(/"/g, '\\"')}"`;
+    // Pass the command as an argument to gemini.
+    // The -p flag is for piping prompt content via stdin, which is not the primary mode of this endpoint.
+    const finalCommand = `gemini "${command.replace(/"/g, '\\"')}"`;
     
     const child = spawn('bash', ['-c', finalCommand], {
       cwd: projectPath || process.cwd(),
@@ -644,7 +645,76 @@ app.get('/api/health', (req, res) => {
 // Error handling middleware
 app.use((error, req, res, next) => {
   console.error('Server error:', error);
+  console.error('Server error:', error);
   res.status(500).json({ error: 'Internal server error' });
+});
+
+// Endpoint to get list of available models
+app.post('/api/models/list', async (req, res) => {
+  try {
+    const { apiKey } = req.body;
+    const execEnv = { ...process.env };
+    if (apiKey) {
+      execEnv.GEMINI_API_KEY = apiKey;
+    }
+
+    // Command to list models in JSON format. Adjust if the actual command is different.
+    // Using "gemini models list --format json" as a common pattern.
+    // If gemini-cli uses a different flag or structure, this will need an update.
+    const command = 'gemini models list --format json';
+
+    const child = spawn('bash', ['-c', command], {
+      env: execEnv,
+      stdio: ['pipe', 'pipe', 'pipe']
+    });
+
+    let stdout = '';
+    let stderr = '';
+    let hasError = false;
+
+    child.stdout.on('data', (data) => {
+      stdout += data.toString();
+    });
+
+    child.stderr.on('data', (data) => {
+      stderr += data.toString();
+      if (stderr.toLowerCase().includes('error')) {
+          hasError = true;
+      }
+    });
+
+    child.on('close', (code) => {
+      if (hasError || code !== 0) {
+        console.error(`Error listing models: ${stderr}`);
+        // Try to parse stdout for any partial JSON that might contain an error message from the CLI
+        try {
+            const jsonError = JSON.parse(stdout);
+            if (jsonError && jsonError.error) {
+                return res.status(500).json({ error: jsonError.error.message || stderr || 'Failed to list models' });
+            }
+        } catch (e) {
+            // ignore parsing error, stdout might not be JSON
+        }
+        return res.status(500).json({ error: stderr || 'Failed to list models', details: stdout });
+      }
+      try {
+        const models = JSON.parse(stdout);
+        res.json({ models });
+      } catch (error) {
+        console.error('Error parsing models list JSON:', error);
+        res.status(500).json({ error: 'Failed to parse models list from CLI output', details: stdout });
+      }
+    });
+
+    child.on('error', (error) => {
+      console.error('Spawn error listing models:', error);
+      res.status(500).json({ error: `Failed to execute gemini command: ${error.message}` });
+    });
+
+  } catch (error) {
+    console.error('Error in /api/models/list:', error);
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // Start server
