@@ -921,12 +921,27 @@ const FileSelector = ({ show, currentPath, searchQuery, onSelect, onClose, uploa
   const loadDirectory = async (path) => {
     setLoading(true);
     try {
-      const result = await api.listFiles(path);
-      setFiles(result.files || []);
-      setDirectories(result.directories || []);
+      const result = await api.listFiles(path); // Server returns { files: [arrayOfDetailedObjects] }
+      const newFiles = [];
+      const newDirectories = [];
+      if (result && result.files && Array.isArray(result.files)) {
+        result.files.forEach(item => {
+          if (item && typeof item.name === 'string') { // Basic validation
+            if (item.type === 'file') {
+              newFiles.push(item.name);
+            } else if (item.type === 'directory') {
+              newDirectories.push(item.name);
+            }
+          }
+        });
+      }
+      setFiles(newFiles);
+      setDirectories(newDirectories);
     } catch (error) {
       console.error('Failed to load directory:', error);
-      // If error loading, try to go to parent or root
+      setFiles([]); // Clear files on error
+      setDirectories([]); // Clear directories on error
+      // Optionally, try to go to parent or root, but ensure states are cleared first
       if (path !== '/' && path !== currentPath) {
         const parentDir = path.split('/').slice(0, -1).join('/') || '/';
         setCurrentDir(parentDir);
