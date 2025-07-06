@@ -898,10 +898,10 @@ const FileSelector = ({ show, currentPath, searchQuery, onSelect, onClose, uploa
 
   // Filter files and directories
   const filteredFiles = files.filter(f =>
-    f.toLowerCase().includes(searchQuery.toLowerCase())
+    typeof f === 'string' && f.toLowerCase().includes(searchQuery.toLowerCase())
   );
   const filteredDirs = directories.filter(d =>
-    d.toLowerCase().includes(searchQuery.toLowerCase())
+    typeof d === 'string' && d.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
   // Include uploaded files in the list
