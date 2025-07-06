@@ -23,6 +23,8 @@ import {
   Hash, Command, X, Loader, MessageCircle, Folder, User, Cloud, HelpCircle
 } from 'lucide-react';
 
+import { readJsonFile } from './utils/fileUtils';
+
 // Simple Icon component to match backup usage
 const Icon = ({ name, className }) => {
   const icons = {
@@ -487,7 +489,8 @@ const AddMcpServerForm = ({ newServer, setNewServer, addServer, setEditingServer
 );
 
 // MCP Servers Component
-const MCPServers = ({ settings, setSettings, api, showToast }) => {
+// Exporting for testing purposes
+export const MCPServers = ({ settings, setSettings, api, showToast }) => {
   const [editingServer, setEditingServer] = useState(null);
   const [showTranslator, setShowTranslator] = useState(false);
   const [serverConnections, setServerConnections] = useState({});
@@ -649,22 +652,21 @@ const MCPServers = ({ settings, setSettings, api, showToast }) => {
       const file = e.target.files[0];
       if (file) {
         try {
-          const text = await file.text();
-          const config = JSON.parse(text);
+          const config = await readJsonFile(file); // Use the new utility
 
           // Handle different config formats
-          let mcpServers = {};
+          let mcpServersToImport = {};
 
           if (config.mcpServers) {
             // Gemini CLI format
-            mcpServers = config.mcpServers;
+            mcpServersToImport = config.mcpServers;
           } else if (config.settings && config.settings.mcpServers) {
             // Full config export format
-            mcpServers = config.settings.mcpServers;
+            mcpServersToImport = config.settings.mcpServers;
           } else {
             // Standard MCP format - translate it
             for (const [name, serverConfig] of Object.entries(config)) {
-              mcpServers[name] = {
+              mcpServersToImport[name] = {
                 command: serverConfig.command,
                 args: serverConfig.args || [],
                 env: serverConfig.env || {},
@@ -680,11 +682,11 @@ const MCPServers = ({ settings, setSettings, api, showToast }) => {
             ...prevSettings,
             mcpServers: {
               ...prevSettings.mcpServers,
-              ...mcpServers
+              ...mcpServersToImport // Use the processed servers
             }
           }));
 
-          showToast(`Successfully imported ${Object.keys(mcpServers).length} MCP server(s)!`, 'success');
+          showToast(`Successfully imported ${Object.keys(mcpServersToImport).length} MCP server(s)!`, 'success');
         } catch (error) {
           showToast(`Failed to import MCP configuration: ${error.message}`, 'error');
         }
