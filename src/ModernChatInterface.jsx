@@ -326,12 +326,22 @@ export const ModernChatInterface = ({
       setInput(newInput);
       setShowFileSelector(false);
 
+      // Temporarily comment out focus/selection logic for diagnostics
+      /*
       setTimeout(() => {
         const newPos = atMatch[1].length + filePath.length + 2;
-        inputRef.current?.setSelectionRange(newPos, newPos);
-        inputRef.current?.focus();
+        if (inputRef.current) {
+            inputRef.current.focus();
+            inputRef.current.setSelectionRange(newPos, newPos);
+        }
       }, 0);
+      */
     }
+    // It's good practice to have an else or handle cases where atMatch might be null,
+    // though theoretically, selectFile should only be called when the @ pattern is active.
+    // If atMatch is null, the input remains unchanged and showFileSelector is not set to false.
+    // This could be a minor bug if selectFile can be called in other contexts.
+    // For now, focusing on the blanking issue.
   };
 
   const handleFilesUploaded = async (files) => {

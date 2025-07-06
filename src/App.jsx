@@ -856,11 +856,13 @@ const ProjectSelector = ({ currentProject, setCurrentProject, onProjectChange, c
                         <div className="text-xs text-gray-400">{project.type} project</div>
                       </div>
                     </div>
-                    {project.hasGeminiConfig && (
+                    {/* {project.hasGeminiConfig && (
+                      // This badge is removed as its meaning is unclear without the context of the removed Projects tab.
+                      // Configuration (settings.json) is loaded when a project is selected.
                       <span className="text-xs bg-green-600/20 text-green-400 px-2 py-1 rounded-full">
                         Configured
                       </span>
-                    )}
+                    )} */}
                   </div>
                   <div className="text-xs text-gray-500 mt-1 truncate">
                     {project.path}
