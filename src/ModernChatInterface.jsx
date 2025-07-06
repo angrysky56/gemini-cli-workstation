@@ -42,7 +42,8 @@ export const ModernChatInterface = ({
   const commandMenuRef = useRef(null);
   const fileSelectorRef = useRef(null);
 
-  // Available slash commands
+  // Available slash commands - Temporarily commented out for diagnostics
+  /*
   const commands = [
     { cmd: '/help', desc: 'Display help information' },
     { cmd: '/tools', desc: 'List available tools' },
@@ -63,6 +64,8 @@ export const ModernChatInterface = ({
     { cmd: '/about', desc: 'Show version information' },
     { cmd: '/quit', desc: 'Exit Gemini CLI' }
   ];
+  */
+  const commands = []; // Define as empty array to prevent runtime errors if referenced
 
   // Load chat history and uploaded files when component mounts or currentProject changes
   useEffect(() => {
@@ -77,22 +80,30 @@ export const ModernChatInterface = ({
 
   // Effect to manage displayedFolders based on settings.baseFolderPath and currentProject
   useEffect(() => {
-    setDisplayedFolders(prev => {
-      const newSet = new Set(prev);
+    setDisplayedFolders(prevDisplayedFolders => {
+      const candidateFolders = new Set(prevDisplayedFolders);
+
       if (settings.baseFolderPath) {
-        newSet.add(settings.baseFolderPath);
+        candidateFolders.add(settings.baseFolderPath);
       }
       if (currentProject) {
-        newSet.add(currentProject);
+        candidateFolders.add(currentProject);
       }
 
-      const newArray = Array.from(newSet);
+      const uniqueFoldersArray = Array.from(candidateFolders);
 
-      // Ensure settings.baseFolderPath is first, if it exists
-      if (settings.baseFolderPath && newArray.includes(settings.baseFolderPath)) {
-        return [settings.baseFolderPath, ...newArray.filter(f => f !== settings.baseFolderPath)];
+      if (settings.baseFolderPath && uniqueFoldersArray.includes(settings.baseFolderPath)) {
+        // If baseFolderPath is present, make it the first item, followed by others.
+        return [
+          settings.baseFolderPath,
+          ...uniqueFoldersArray.filter(f => f !== settings.baseFolderPath)
+        ];
+      } else {
+        // If no baseFolderPath, or it wasn't in candidateFolders (e.g. null/empty),
+        // return the unique folders as they are (order determined by Set iteration + prev order).
+        // This case should be rare if baseFolderPath is usually a valid path.
+        return uniqueFoldersArray;
       }
-      return newArray;
     });
   }, [currentProject, settings.baseFolderPath]);
 
@@ -378,6 +389,29 @@ export const ModernChatInterface = ({
 
   // addWorkingFolder and removeWorkingFolder are removed as displayedFolders is now reactive.
   // setCurrentProject (from props) is used to change the active folder, which updates displayedFolders.
+
+  const handleRemoveDisplayedFolder = (folderToRemove) => {
+    setDisplayedFolders(prevDisplayedFolders => {
+      const updatedFolders = prevDisplayedFolders.filter(folder => folder !== folderToRemove);
+
+      if (currentProject === folderToRemove) {
+        // If the removed folder was the current project, reset currentProject.
+        // Prioritize settings.baseFolderPath, then the first remaining *updated* folder, then empty.
+        if (settings.baseFolderPath && updatedFolders.includes(settings.baseFolderPath)) {
+          setCurrentProject(settings.baseFolderPath);
+        } else if (updatedFolders.length > 0) {
+          setCurrentProject(updatedFolders[0]);
+        } else if (settings.baseFolderPath) {
+          // This case covers if updatedFolders is empty, but baseFolderPath itself was not in displayedFolders to begin with (e.g. it was cleared from settings)
+          // but is still a valid fallback. More robustly, just check if baseFolderPath is set.
+          setCurrentProject(settings.baseFolderPath);
+        } else {
+          setCurrentProject(''); // Fallback to empty if no other options
+        }
+      }
+      return updatedFolders;
+    });
+  };
 
   const copyMessageToClipboard = async (content) => {
     try {
@@ -683,11 +717,19 @@ export const ModernChatInterface = ({
                       title={folder} // Show full path on hover
                     >
                       {isHomeFolder ? <Home className="w-3 h-3" /> : <FolderOpen className="w-3 h-3" />}
-                      <span>{folderName}</span>
-                      {/* Removal X is omitted as folders are removed by not being currentProject or baseFolderPath over time,
-                          or we might need a dedicated "clear quick add list" feature if they persist too long.
-                          For now, the list grows with visited projects. The problem stated the plus was redundant,
-                          not necessarily the X, but the management of this list is now different. */}
+                      <span className="truncate" style={{maxWidth: '150px'}}>{folderName}</span>
+                      {!isHomeFolder && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation(); // Prevent click from triggering setCurrentProject on the div
+                            handleRemoveDisplayedFolder(folder);
+                          }}
+                          className="ml-2 p-0.5 hover:bg-red-500/30 rounded-full text-gray-400 hover:text-red-400"
+                          title={`Remove ${folderName} from list`}
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      )}
                     </div>
                   );
                 }
@@ -766,7 +808,8 @@ export const ModernChatInterface = ({
         {/* Input Area */}
         <footer className={`${colors.darkGlass} border-t border-white/10 p-6`}>
           <div className="max-w-4xl mx-auto relative">
-            {/* Command Menu */}
+            {/* Command Menu - Temporarily commented out for diagnostics */}
+            {/*
             {showCommandMenu && (
               <div ref={commandMenuRef} className="absolute bottom-full mb-2 w-full bg-gray-800 border border-gray-600 rounded-lg shadow-lg max-h-60 overflow-y-auto z-50">
                 {commands
@@ -783,6 +826,7 @@ export const ModernChatInterface = ({
                   ))}
               </div>
             )}
+            */}
 
             {/* File Selector */}
             {showFileSelector && (
