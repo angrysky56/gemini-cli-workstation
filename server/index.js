@@ -372,18 +372,29 @@ app.post('/api/cli/execute', async (req, res) => {
     
     // Pass the command as an argument to gemini.
     // If it's not a slash, at, or bang command, assume it's a prompt and use -p.
-    let finalCommand;
+    let finalCommandArgs = [];
     const trimmedCommand = command.trim();
-    if (trimmedCommand.startsWith('/') || trimmedCommand.startsWith('@') || trimmedCommand.startsWith('!')) {
-        finalCommand = `gemini "${command.replace(/"/g, '\\"')}"`; // Use original command for accurate quoting
+
+    if (trimmedCommand.startsWith('/')) {
+        // For slash commands, treat the part after '/' as the command and potential arguments for gemini
+        // e.g., "/help" becomes "gemini help", "/tool list" becomes "gemini tool list"
+        const cliCmd = trimmedCommand.substring(1); // Remove leading slash
+        // Split the command and its arguments properly for spawn
+        // For simplicity, we'll pass the whole string after "gemini" and let shell parse it.
+        // A more robust solution would parse arguments carefully.
+        finalCommandArgs = ['-c', `gemini ${cliCmd.replace(/"/g, '\\"')}`];
+    } else if (trimmedCommand.startsWith('@') || trimmedCommand.startsWith('!')) {
+        // For @ and ! commands, pass them as a single quoted argument to gemini
+        finalCommandArgs = ['-c', `gemini "${trimmedCommand.replace(/"/g, '\\"')}"`];
     } else {
-        // For plain chat, use the --prompt flag
-        finalCommand = `gemini --prompt "${command.replace(/"/g, '\\"')}"`;
+        // For plain chat, use the --prompt flag with the entire command as a single argument
+        finalCommandArgs = ['-c', `gemini --prompt "${trimmedCommand.replace(/"/g, '\\"')}"`];
     }
     
-    console.log(`Executing backend command: ${finalCommand}`); // For debugging
+    // For debugging, show the command as it would be run by bash
+    console.log(`Executing backend command via bash: ${finalCommandArgs[1]}`);
 
-    const child = spawn('bash', ['-c', finalCommand], {
+    const child = spawn('bash', finalCommandArgs, {
       cwd: projectPath || process.cwd(),
       env: execEnv,
       stdio: ['pipe', 'pipe', 'pipe']
