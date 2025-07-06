@@ -358,9 +358,18 @@ app.post('/api/cli/execute', async (req, res) => {
     };
     
     // Pass the command as an argument to gemini.
-    // The -p flag is for piping prompt content via stdin, which is not the primary mode of this endpoint.
-    const finalCommand = `gemini "${command.replace(/"/g, '\\"')}"`;
+    // If it's not a slash, at, or bang command, assume it's a prompt and use -p.
+    let finalCommand;
+    const trimmedCommand = command.trim();
+    if (trimmedCommand.startsWith('/') || trimmedCommand.startsWith('@') || trimmedCommand.startsWith('!')) {
+        finalCommand = `gemini "${command.replace(/"/g, '\\"')}"`; // Use original command for accurate quoting
+    } else {
+        // For plain chat, use the --prompt flag
+        finalCommand = `gemini --prompt "${command.replace(/"/g, '\\"')}"`;
+    }
     
+    console.log(`Executing backend command: ${finalCommand}`); // For debugging
+
     const child = spawn('bash', ['-c', finalCommand], {
       cwd: projectPath || process.cwd(),
       env: execEnv,
