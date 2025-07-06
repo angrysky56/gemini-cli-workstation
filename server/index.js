@@ -87,12 +87,25 @@ async function handleCommandExecution(ws, data) {
     });
 
     // Handle PTY output
-    ptyProcess.onData((data) => {
-      ws.send(JSON.stringify({
-        type: 'output',
-        sessionId,
-        data
-      }));
+    ptyProcess.onData((outputData) => {
+      const outputText = outputData.toString();
+      // Filter out common noisy stderr messages that might be mixed in
+      if (!outputText.includes('DeprecationWarning') &&
+          !outputText.includes('MCP STDERR') &&
+          !outputText.includes('DEBUG:') &&
+          !/\[vite\] connecting\.\.\./i.test(outputText) &&
+          !/\[vite\] connected\./i.test(outputText)
+          ) {
+        ws.send(JSON.stringify({
+          type: 'output',
+          sessionId,
+          data: outputData // Send original buffer if not filtered
+        }));
+      } else {
+        // Optionally, send a filtered message or nothing
+        // For now, we'll just suppress these specific noisy messages
+        console.log(`Filtered PTY output (session ${sessionId}): ${outputText.substring(0, 100)}...`);
+      }
     });
 
     // Handle PTY exit

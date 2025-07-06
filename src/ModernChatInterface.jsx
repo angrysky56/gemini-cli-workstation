@@ -780,7 +780,7 @@ export const ModernChatInterface = ({
             {showFileSelector && (
               <FileSelector
                 show={showFileSelector}
-                currentPath={settings.baseFolderPath || '/'}
+                currentPath={currentProject || settings.baseFolderPath || '/'}
                 searchQuery={fileSearch}
                 onSelect={selectFile}
                 onClose={() => setShowFileSelector(false)}

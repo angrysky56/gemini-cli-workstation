@@ -143,10 +143,10 @@ const McpConfigTranslator = ({ onTranslate }) => {
   );
 };
 
-// Enhanced Project Management Component
-const ProjectManagementTab = ({ currentProject, setCurrentProject, onProjectChange, api, showToast }) => {
-  const [projects, setProjects] = useState([]);
-  const [managedProjects, setManagedProjects] = useState(() => {
+// Enhanced Project Management Component - REMOVED as per user request to simplify project management
+// const ProjectManagementTab = ({ currentProject, setCurrentProject, onProjectChange, api, showToast }) => {
+//   const [projects, setProjects] = useState([]);
+//   const [managedProjects, setManagedProjects] = useState(() => {
     const saved = localStorage.getItem('gemini-cli-managed-projects');
     return saved ? JSON.parse(saved) : [];
   });
@@ -1512,16 +1512,16 @@ function App() {
           />
         );
 
-      case 'projects':
-        return (
-          <ProjectManagementTab
-            currentProject={currentProject}
-            setCurrentProject={setCurrentProject}
-            onProjectChange={handleProjectChange}
-            api={api}
-            showToast={showToast}
-          />
-        );
+      // case 'projects': // Removed as per user request
+      //   return (
+      //     <ProjectManagementTab
+      //       currentProject={currentProject}
+      //       setCurrentProject={setCurrentProject}
+      //       onProjectChange={handleProjectChange}
+      //       api={api}
+      //       showToast={showToast}
+      //     />
+      //   );
 
       case 'tools':
         return (

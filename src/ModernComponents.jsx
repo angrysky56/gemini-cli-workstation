@@ -115,7 +115,7 @@ export const ModernButton = ({
 export const ModernSidebar = ({ activeTab, setActiveTab, isCollapsed, setIsCollapsed }) => {
   const navItems = [
     { id: 'chat', icon: MessageCircle, label: 'Chat Interface', badge: null },
-    { id: 'projects', icon: Folder, label: 'Repositories', badge: null },
+    // { id: 'projects', icon: Folder, label: 'Repositories', badge: null }, // Removed as per user request
     { id: 'tools', icon: Zap, label: 'Tools & MCP', badge: null },
     { id: 'terminal', icon: Terminal, label: 'Terminal', badge: null },
     { id: 'authentication', icon: User, label: 'Authentication', badge: null },
