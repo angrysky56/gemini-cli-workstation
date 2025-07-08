@@ -14,18 +14,25 @@ import FileUploadComponent from './FileUploadComponent';
 
 // Enhanced Chat Interface Component
 export const ModernChatInterface = ({
-  settings,
-  setSettings,
-  envVars,
+  settings, // Changed from settingsForDisplay to settings
   currentProject,
-  setCurrentProject,
-  api
+  // setCurrentProject, // App.jsx manages currentProject selection
+
+  // WebSocket related props passed from App.jsx
+  socket,
+  conversation,      // Lifted state from App.jsx
+  setConversation,   // Lifted state setter from App.jsx
+
+  // api, // No longer used for executeCommand, other api calls might be needed for history if kept
+  // setSettings, // Settings changes should ideally be via commands to gemini-cli PTY
+  // envVars, // Not directly used by MCI for command execution anymore
 }) => {
-  const [conversation, setConversation] = useState([]);
-  const [chatHistory, setChatHistory] = useState([]);
+  // Local UI state for the input field
   const [input, setInput] = useState('');
+  // isLoading might be repurposed for WebSocket send/receive indication, or removed if not needed
   const [isLoading, setIsLoading] = useState(false);
-  const [showHistory, setShowHistory] = useState(true);
+  const [showHistory, setShowHistory] = useState(true); // Local UI concern
+  const [chatHistory, setChatHistory] = useState([]); // Local UI concern for sidebar, if history feature is kept
   const [showCommandMenu, setShowCommandMenu] = useState(false);
   const [showFileSelector, setShowFileSelector] = useState(false);
   const [showUpload, setShowUpload] = useState(false);
@@ -231,9 +238,8 @@ export const ModernChatInterface = ({
   const sendMessage = async (messageText = input) => {
     if (!messageText.trim() || isLoading) return;
 
-    // projectPath for command execution can be currentProject or fallback to settings.baseFolderPath or even undefined for global commands
-    // However, for saving history, it strictly needs currentProject.
-    const executionProjectPath = currentProject || settings.baseFolderPath;
+    // isLoading state might be set true here if desired, and false when PTY output indicates command completion.
+    // For now, simplifying: just send and let App.jsx handle incoming messages.
 
     const userMessage = {
       type: 'user',
@@ -241,72 +247,32 @@ export const ModernChatInterface = ({
       timestamp: new Date().toISOString()
     };
 
+    // Add user's message to conversation locally for immediate feedback
+    // App.jsx will receive PTY output which includes echoed input + gemini's response
     setConversation(prev => [...prev, userMessage]);
+
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ type: 'pty_input', input: messageText + '\n' }));
+      console.log("Sent to PTY:", messageText);
+    } else {
+      console.error('WebSocket not connected or not ready.');
+      setConversation(prev => [
+        ...prev,
+        {
+          type: 'error',
+          content: 'Error: Not connected to the server. Please check connection or refresh.',
+          timestamp: new Date().toISOString()
+        }
+      ]);
+    }
+
     setInput('');
-    setIsLoading(true);
     setShowCommandMenu(false);
     setShowFileSelector(false);
     setSelectedHistoryIndex(-1);
 
-    // Save user message to history only if currentProject is set
-    if (currentProject) {
-      try {
-        await api.saveChatMessage(currentProject, userMessage);
-      } catch (error) {
-        console.error('Failed to save user message to history:', error);
-      }
-    } else {
-      console.warn('User message not saved to history: No current project selected.');
-    }
-
-    try {
-      // Execute command using executionProjectPath (could be undefined if no project/base folder)
-      const result = await api.executeCommand(executionProjectPath, messageText, settings, envVars);
-
-      const output = result.output || 'Command completed successfully';
-      let messageType = 'assistant';
-
-      // Detect message type based on output content
-      if (output.includes('Tool:') && output.includes('Status:')) {
-        messageType = 'tool';
-      } else if (result.hasError) {
-        messageType = 'error';
-      }
-
-      const aiResponse = {
-        type: messageType,
-        content: output,
-        timestamp: new Date().toISOString(),
-        success: result.success
-      };
-
-      setConversation(prev => [...prev, aiResponse]);
-
-      // Save AI response to history only if currentProject is set
-      if (currentProject) {
-        try {
-          await api.saveChatMessage(currentProject, aiResponse);
-          loadChatHistory(currentProject); // Refresh history for the current project
-        } catch (error) {
-          console.error('Failed to save AI response to history:', error);
-        }
-      } else {
-        console.warn('AI response not saved to history: No current project selected.');
-      }
-
-    } catch (error) {
-      console.error('Command execution error:', error);
-      const errorResponse = {
-        type: 'error',
-        content: error.message.includes('fetch failed')
-          ? 'Cannot connect to backend server. Please ensure the server is running on port 3001.'
-          : `Error: ${error.message}`,
-        timestamp: new Date().toISOString()
-      };
-      setConversation(prev => [...prev, errorResponse]);
-    } finally {
-      setIsLoading(false);
-    }
+    // Chat history saving via API is removed for now, as conversation flow is different.
+    // This would need to be re-thought for an interactive PTY stream.
   };
 
   const selectCommand = (cmd) => {

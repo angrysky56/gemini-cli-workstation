@@ -26,137 +26,111 @@ app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.static('public'));
 
-// Store active PTY sessions
-const activeSessions = new Map();
-
-// WebSocket connection handling
+// WebSocket connection handling for interactive Gemini CLI session
 wss.on('connection', (ws) => {
-  console.log('Client connected');
-  
-  ws.on('message', async (message) => {
+  // console.log('Chat UI client connected, spawning gemini PTY.'); // Temporarily silenced
+
+  const geminiPty = pty.spawn('gemini', ['-d'], { // Added -d debug flag
+    name: 'xterm-color',
+    cols: 80, // Client can send 'pty_resize' to update
+    rows: 24, // Client can send 'pty_resize' to update
+    cwd: process.cwd(), // TODO: Make this project-specific if needed, passed by client on connection?
+    env: (() => {
+      const ptyEnv = { ...process.env }; // Start with current environment
+      const googleAuthVars = [
+        'GEMINI_API_KEY',
+        'GOOGLE_API_KEY',
+        'GOOGLE_APPLICATION_CREDENTIALS',
+        'GOOGLE_CLOUD_PROJECT',
+        'GOOGLE_CLOUD_LOCATION',
+        'GOOGLE_GENAI_USE_VERTEXAI'
+      ];
+      googleAuthVars.forEach(key => {
+        if (process.env[key]) { // If defined in the node server's environment
+          ptyEnv[key] = process.env[key]; // Ensure it's passed to PTY
+        }
+      });
+      // Add any other specific env vars needed by gemini-cli or terminal
+      ptyEnv['TERM'] = 'xterm-256color'; // Already good from default but explicit
+      return ptyEnv;
+    })()
+  });
+  // console.log(`Spawned gemini PTY with PID: ${geminiPty.pid}`); // Temporarily silenced
+
+  // Store PTY process on the WebSocket object
+  ws.geminiPty = geminiPty;
+
+  geminiPty.onData(data => {
+    // This is the actual PTY data stream from gemini-cli, should NOT be silenced.
+    // For extreme debugging if needed: console.log(`PTY Raw Data (PID: ${geminiPty.pid}):`, data);
     try {
-      const data = JSON.parse(message.toString());
-      
-      if (data.type === 'execute') {
-        await handleCommandExecution(ws, data);
-      } else if (data.type === 'input') {
-        await handleInput(ws, data);
-      } else if (data.type === 'resize') {
-        await handleResize(ws, data);
-      }
-    } catch (error) {
-      console.error('WebSocket message error:', error);
-      ws.send(JSON.stringify({
-        type: 'error',
-        data: { message: error.message }
-      }));
+      ws.send(JSON.stringify({ type: 'pty_output', data: data }));
+    } catch (e) {
+      console.error("Error sending PTY data to client:", e);
     }
   });
 
-  ws.on('close', () => {
-    console.log('Client disconnected');
-    // Clean up any active sessions for this client
-    for (const [sessionId, session] of activeSessions) {
-      if (session.ws === ws) {
-        session.ptyProcess?.kill();
-        activeSessions.delete(sessionId);
+  geminiPty.onExit(({ exitCode, signal }) => {
+    console.log(`Gemini PTY (PID: ${geminiPty.pid}) exited with code: ${exitCode}, signal: ${signal}`);
+    console.log('[Backend] Gemini PTY onExit details:', { exitCode, signal }); // Added logging
+    try {
+      ws.send(JSON.stringify({ type: 'pty_exit', exitCode, signal }));
+      ws.geminiPty = null; // Clear reference
+      // ws.close(); // Optionally close WebSocket connection
+    } catch (e) {
+      console.error("Error sending PTY exit to client:", e);
+    }
+  });
+
+  ws.on('message', async (message) => {
+    try {
+      const data = JSON.parse(message.toString());
+      // console.log(`Message from client (PID: ${ws.geminiPty?.pid}):`, JSON.stringify(data)); // Temporarily silenced for clean stream test
+
+      if (ws.geminiPty) {
+        if (data.type === 'pty_input') {
+          ws.geminiPty.write(data.input);
+        } else if (data.type === 'pty_resize') {
+          if (data.cols && data.rows) {
+            ws.geminiPty.resize(data.cols, data.rows);
+            // console.log(`Resized PTY (PID: ${ws.geminiPty.pid}) to cols: ${data.cols}, rows: ${data.rows}`); // Temporarily silenced
+          }
+        }
+      } else {
+        console.warn("Received message but no PTY session active for this WebSocket.");
       }
+    } catch (error) {
+      console.error('WebSocket message processing error:', error);
+      try {
+        ws.send(JSON.stringify({
+          type: 'error',
+          data: { message: "Error processing your request: " + error.message }
+        }));
+      } catch (e) {
+        console.error("Error sending error message to client:", e);
+      }
+    }
+  });
+
+  ws.on('close', (code, reason) => { // Added code and reason parameters
+    console.log(`Chat UI client disconnected. Killing PTY (PID: ${ws.geminiPty?.pid}).`);
+    console.log('[Backend] WebSocket onclose details:', { code, reason: reason ? reason.toString() : undefined }); // Added logging
+    if (ws.geminiPty) {
+      ws.geminiPty.kill();
+      ws.geminiPty = null;
+    }
+  });
+
+  ws.on('error', (error) => {
+    console.error(`WebSocket error (PTY PID: ${ws.geminiPty?.pid}):`, error);
+    console.log('[Backend] WebSocket onerror details:', error); // Added logging
+    if (ws.geminiPty) {
+      ws.geminiPty.kill(); // Ensure PTY is killed on WebSocket error too
+      ws.geminiPty = null;
     }
   });
 });
 
-// Handle command execution
-async function handleCommandExecution(ws, data) {
-  const { command, workingDir, sessionId } = data;
-  
-  try {
-    // Create new PTY session
-    const ptyProcess = pty.spawn('bash', [], {
-      name: 'xterm-color',
-      cols: data.cols || 80,
-      rows: data.rows || 24,
-      cwd: workingDir || process.cwd(),
-      env: { ...process.env, TERM: 'xterm-256color' }
-    });
-
-    // Store session
-    activeSessions.set(sessionId, {
-      ptyProcess,
-      ws,
-      workingDir: workingDir || process.cwd()
-    });
-
-    // Handle PTY output
-    ptyProcess.onData((outputData) => {
-      const outputText = outputData.toString();
-      // Filter out common noisy stderr messages that might be mixed in
-      if (!outputText.includes('DeprecationWarning') &&
-          !outputText.includes('MCP STDERR') &&
-          !outputText.includes('DEBUG:') &&
-          !/\[vite\] connecting\.\.\./i.test(outputText) &&
-          !/\[vite\] connected\./i.test(outputText)
-          ) {
-        ws.send(JSON.stringify({
-          type: 'output',
-          sessionId,
-          data: outputData // Send original buffer if not filtered
-        }));
-      } else {
-        // Optionally, send a filtered message or nothing
-        // For now, we'll just suppress these specific noisy messages
-        console.log(`Filtered PTY output (session ${sessionId}): ${outputText.substring(0, 100)}...`);
-      }
-    });
-
-    // Handle PTY exit
-    ptyProcess.onExit((exitCode) => {
-      ws.send(JSON.stringify({
-        type: 'exit',
-        sessionId,
-        exitCode
-      }));
-      activeSessions.delete(sessionId);
-    });
-
-    // Send initial command
-    if (command) {
-      ptyProcess.write(command + '\n');
-    }
-
-    ws.send(JSON.stringify({
-      type: 'session_started',
-      sessionId
-    }));
-
-  } catch (error) {
-    console.error('Command execution error:', error);
-    ws.send(JSON.stringify({
-      type: 'error',
-      sessionId,
-      data: { message: error.message }
-    }));
-  }
-}
-
-// Handle user input to PTY
-async function handleInput(ws, data) {
-  const { sessionId, input } = data;
-  const session = activeSessions.get(sessionId);
-  
-  if (session && session.ptyProcess) {
-    session.ptyProcess.write(input);
-  }
-}
-
-// Handle terminal resize
-async function handleResize(ws, data) {
-  const { sessionId, cols, rows } = data;
-  const session = activeSessions.get(sessionId);
-  
-  if (session && session.ptyProcess) {
-    session.ptyProcess.resize(cols, rows);
-  }
-}
 
 // API Routes
 
@@ -165,17 +139,17 @@ app.get('/api/projects', async (req, res) => {
   try {
     const homeDir = process.env.HOME || process.env.USERPROFILE;
     const repositoriesDir = path.join(homeDir, 'Repositories');
-    
+
     const projects = [];
-    
+
     try {
       const entries = await fs.readdir(repositoriesDir, { withFileTypes: true });
-      
+
       for (const entry of entries) {
         if (entry.isDirectory()) {
           const projectPath = path.join(repositoriesDir, entry.name);
           const projectInfo = await getProjectInfo(projectPath);
-          
+
           if (projectInfo.isProject) {
             projects.push({
               name: entry.name,
@@ -188,7 +162,7 @@ app.get('/api/projects', async (req, res) => {
     } catch (error) {
       console.error('Error reading repositories directory:', error);
     }
-    
+
     res.json(projects);
   } catch (error) {
     console.error('Error getting projects:', error);
@@ -199,10 +173,10 @@ app.get('/api/projects', async (req, res) => {
 // Get project information
 async function getProjectInfo(projectPath) {
   const info = { isProject: false, hasGeminiConfig: false, type: 'unknown' };
-  
+
   try {
     const entries = await fs.readdir(projectPath);
-    
+
     // Check for project indicators
     if (entries.includes('.git')) {
       info.isProject = true;
@@ -220,7 +194,7 @@ async function getProjectInfo(projectPath) {
       info.isProject = true;
       info.type = 'go';
     }
-    
+
     // Check for Gemini configuration
     if (entries.includes('.gemini')) {
       const geminiPath = path.join(projectPath, '.gemini');
@@ -233,15 +207,15 @@ async function getProjectInfo(projectPath) {
         // Ignore error if .gemini is not a directory
       }
     }
-    
+
     // Check for context files
     const contextFiles = ['GEMINI.md', 'AGENTS.md', 'gemini.md'];
     info.hasContext = contextFiles.some(file => entries.includes(file));
-    
+
   } catch (error) {
     console.error(`Error getting project info for ${projectPath}:`, error);
   }
-  
+
   return info;
 }
 
@@ -249,13 +223,13 @@ async function getProjectInfo(projectPath) {
 app.get('/api/config/load', async (req, res) => {
   try {
     const { projectPath } = req.query;
-    
+
     if (!projectPath) {
       return res.status(400).json({ error: 'Project path is required' });
     }
-    
+
     const config = { settings: {}, env: {} };
-    
+
     // Load Gemini settings
     const settingsPath = path.join(projectPath, '.gemini', 'settings.json');
     try {
@@ -264,13 +238,13 @@ app.get('/api/config/load', async (req, res) => {
     } catch (error) {
       console.log('No settings.json found or error reading it:', error.message);
     }
-    
+
     // Load environment variables
     const envPath = path.join(projectPath, '.env');
     try {
       const envContent = await fs.readFile(envPath, 'utf8');
       const envLines = envContent.split('\n');
-      
+
       for (const line of envLines) {
         const trimmedLine = line.trim();
         if (trimmedLine && !trimmedLine.startsWith('#')) {
@@ -284,7 +258,7 @@ app.get('/api/config/load', async (req, res) => {
     } catch (error) {
       console.log('No .env file found or error reading it:', error.message);
     }
-    
+
     res.json(config);
   } catch (error) {
     console.error('Error loading configuration:', error);
@@ -296,21 +270,38 @@ app.get('/api/config/load', async (req, res) => {
 app.post('/api/config/save', async (req, res) => {
   try {
     const { projectPath, settings, env } = req.body;
-    
+
     if (!projectPath) {
       return res.status(400).json({ error: 'Project path is required' });
     }
-    
+
     // Ensure .gemini directory exists
     const geminiDir = path.join(projectPath, '.gemini');
     await fs.mkdir(geminiDir, { recursive: true });
-    
+
     // Save settings.json
     if (settings) {
       const settingsPath = path.join(geminiDir, 'settings.json');
-      await fs.writeFile(settingsPath, JSON.stringify(settings, null, 2));
+      let existingSettings = {};
+      try {
+        // Try to read existing settings
+        const existingContent = await fs.readFile(settingsPath, 'utf8');
+        existingSettings = JSON.parse(existingContent);
+      } catch (error) {
+        // File might not exist or is invalid JSON, which is fine.
+        // We'll just use an empty object as the base.
+        if (error.code !== 'ENOENT') {
+          console.warn(`Warning: Could not read or parse existing settings.json at ${settingsPath}:`, error.message);
+        }
+      }
+      // Merge new settings into existing ones. New settings take precedence.
+      const updatedSettings = { ...existingSettings, ...settings };
+      console.log(">>>>>>>>>>>> SETTINGS RECEIVED FROM UI:", JSON.stringify(settings, null, 2));
+      console.log(">>>>>>>>>>>> EXISTING SETTINGS LOADED FROM FILE:", JSON.stringify(existingSettings, null, 2));
+      console.log(">>>>>>>>>>>> FINAL MERGED SETTINGS TO BE SAVED:", JSON.stringify(updatedSettings, null, 2));
+      await fs.writeFile(settingsPath, JSON.stringify(updatedSettings, null, 2));
     }
-    
+
     // Save .env file
     if (env) {
       const envPath = path.join(projectPath, '.env');
@@ -319,7 +310,7 @@ app.post('/api/config/save', async (req, res) => {
         .join('\n');
       await fs.writeFile(envPath, envContent);
     }
-    
+
     res.json({ success: true });
   } catch (error) {
     console.error('Error saving configuration:', error);
@@ -331,14 +322,14 @@ app.post('/api/config/save', async (req, res) => {
 app.post('/api/mcp/translate', async (req, res) => {
   try {
     const { mcpConfig } = req.body;
-    
+
     if (!mcpConfig) {
       return res.status(400).json({ error: 'MCP configuration is required' });
     }
-    
+
     // Convert standard MCP config to Gemini CLI format
     const geminiConfig = { mcpServers: {} };
-    
+
     for (const [serverName, serverConfig] of Object.entries(mcpConfig)) {
       geminiConfig.mcpServers[serverName] = {
         command: serverConfig.command,
@@ -349,7 +340,7 @@ app.post('/api/mcp/translate', async (req, res) => {
         trust: serverConfig.trust || false
       };
     }
-    
+
     res.json(geminiConfig);
   } catch (error) {
     console.error('Error translating MCP configuration:', error);
@@ -361,57 +352,67 @@ app.post('/api/mcp/translate', async (req, res) => {
 app.post('/api/cli/execute', async (req, res) => {
   try {
     const { projectPath, command, settings, envVars, timeout = 30000 } = req.body;
-    
+    console.log(">>>>>>>>>>>> RAW COMMAND RECEIVED BY BACKEND:", JSON.stringify(command)); // LOGGING LINE
+
     // Build environment with project-specific variables
-    const execEnv = { 
+    const execEnv = {
       ...process.env,
       ...envVars,
       // Suppress Node.js deprecation warnings that clutter output
       NODE_NO_WARNINGS: '1'
     };
-    
-    // Pass the command as an argument to gemini.
-    // If it's not a slash, at, or bang command, assume it's a prompt and use -p.
-    let finalCommandArgs = [];
+
     const trimmedCommand = command.trim();
+    const geminiExecutable = 'gemini'; // Assuming 'gemini' is in PATH
+    let argsArray = [];
 
-    if (trimmedCommand.startsWith('/')) {
-        // For slash commands, treat the part after '/' as the command and potential arguments for gemini
-        // e.g., "/help" becomes "gemini help", "/tool list" becomes "gemini tool list"
-        const cliCmd = trimmedCommand.substring(1); // Remove leading slash
-        // Split the command and its arguments properly for spawn
-        // For simplicity, we'll pass the whole string after "gemini" and let shell parse it.
-        // A more robust solution would parse arguments carefully.
-        finalCommandArgs = ['-c', `gemini ${cliCmd.replace(/"/g, '\\"')}`];
+    if (trimmedCommand.startsWith('/') && !trimmedCommand.startsWith('@') && !trimmedCommand.startsWith('!')) {
+        // For /commands like "/help" or "/tool list item"
+        const parts = trimmedCommand.split(' ');
+        const mainCommand = parts[0]; // e.g., "/help" or "/tool"
+        argsArray.push(mainCommand);
+        if (parts.length > 1) {
+            // Add remaining parts as separate arguments.
+            // This simple split might need refinement if gemini subcommands expect multi-word args to be single strings.
+            argsArray.push(...parts.slice(1));
+        }
+        // Example: UI "/help" -> argsArray = ["/help"]
+        // Example: UI "/tool list item" -> argsArray = ["/tool", "list", "item"]
     } else if (trimmedCommand.startsWith('@') || trimmedCommand.startsWith('!')) {
-        // For @ and ! commands, pass them as a single quoted argument to gemini
-        finalCommandArgs = ['-c', `gemini "${trimmedCommand.replace(/"/g, '\\"')}"`];
+        // For @file or !shell commands, pass the whole string as a single argument.
+        // This assumes gemini handles the '@' and '!' prefixes internally when passed this way.
+        // This might be an area for refinement if gemini expects '!' to be handled by a shell.
+        argsArray.push(trimmedCommand);
+        // Example: UI "@file.txt" -> argsArray = ["@file.txt"]
+        // Example: UI "!ls -la" -> argsArray = ["!ls -la"]
     } else {
-        // For plain chat, use the --prompt flag with the entire command as a single argument
-        finalCommandArgs = ['-c', `gemini --prompt "${trimmedCommand.replace(/"/g, '\\"')}"`];
+        // For plain prompts
+        argsArray.push('--prompt', trimmedCommand);
+        // Example: UI "hi" -> argsArray = ["--prompt", "hi"]
+        // Example: UI "help" (no slash) -> argsArray = ["--prompt", "help"]
     }
-    
-    // For debugging, show the command as it would be run by bash
-    console.log(`Executing backend command via bash: ${finalCommandArgs[1]}`);
 
-    const child = spawn('bash', finalCommandArgs, {
+    console.log("Spawning gemini with command:", geminiExecutable, "and args:", JSON.stringify(argsArray));
+
+    const child = spawn(geminiExecutable, argsArray, {
       cwd: projectPath || process.cwd(),
       env: execEnv,
-      stdio: ['pipe', 'pipe', 'pipe']
+      stdio: ['pipe', 'pipe', 'pipe'],
+      shell: false // Explicitly do not use shell to avoid interference
     });
-    
+
     let stdout = '';
     let stderr = '';
     let hasError = false;
-    
+
     child.stdout.on('data', (data) => {
       stdout += data.toString();
     });
-    
+
     child.stderr.on('data', (data) => {
       const stderrText = data.toString();
       // Filter out Node.js deprecation warnings and MCP debug messages
-      if (!stderrText.includes('DeprecationWarning') && 
+      if (!stderrText.includes('DeprecationWarning') &&
           !stderrText.includes('MCP STDERR') &&
           !stderrText.includes('DEBUG:')) {
         stderr += stderrText;
@@ -420,18 +421,18 @@ app.post('/api/cli/execute', async (req, res) => {
         }
       }
     });
-    
+
     const timeoutId = setTimeout(() => {
       child.kill('SIGTERM');
       hasError = true;
     }, timeout);
-    
+
     child.on('close', (code) => {
       clearTimeout(timeoutId);
-      
+
       // If we have stdout content, use that as the main output
       const output = stdout.trim() || stderr.trim() || 'Command completed successfully';
-      
+
       res.json({
         exitCode: code,
         output: output,
@@ -441,7 +442,7 @@ app.post('/api/cli/execute', async (req, res) => {
         success: !hasError && (code === 0 || stdout.trim())
       });
     });
-    
+
     child.on('error', (error) => {
       clearTimeout(timeoutId);
       res.json({
@@ -452,7 +453,7 @@ app.post('/api/cli/execute', async (req, res) => {
         success: false
       });
     });
-    
+
   } catch (error) {
     console.error('Error executing CLI command:', error);
     res.status(500).json({ error: error.message });
@@ -463,13 +464,13 @@ app.post('/api/cli/execute', async (req, res) => {
 app.get('/api/chat/history', async (req, res) => {
   try {
     const { projectPath } = req.query;
-    
+
     if (!projectPath) {
       return res.json({ history: [] });
     }
-    
+
     const historyPath = path.join(projectPath, '.gemini', 'chat_history.json');
-    
+
     try {
       const historyContent = await fs.readFile(historyPath, 'utf8');
       const history = JSON.parse(historyContent);
@@ -487,17 +488,17 @@ app.get('/api/chat/history', async (req, res) => {
 app.post('/api/chat/message', async (req, res) => {
   try {
     const { projectPath, message } = req.body;
-    
+
     if (!projectPath || !message) {
       return res.status(400).json({ error: 'Project path and message are required' });
     }
-    
+
     // Ensure .gemini directory exists
     const geminiDir = path.join(projectPath, '.gemini');
     await fs.mkdir(geminiDir, { recursive: true });
-    
+
     const historyPath = path.join(geminiDir, 'chat_history.json');
-    
+
     let history = [];
     try {
       const historyContent = await fs.readFile(historyPath, 'utf8');
@@ -505,18 +506,18 @@ app.post('/api/chat/message', async (req, res) => {
     } catch (error) {
       // File doesn't exist, start with empty history
     }
-    
+
     // Add message to history
     history.push({
       ...message,
       timestamp: message.timestamp || new Date().toISOString()
     });
-    
+
     // Keep only last 100 messages to prevent file from growing too large
     if (history.length > 100) {
       history = history.slice(-100);
     }
-    
+
     await fs.writeFile(historyPath, JSON.stringify(history, null, 2));
     res.json({ success: true });
   } catch (error) {
@@ -528,19 +529,19 @@ app.post('/api/chat/message', async (req, res) => {
 app.delete('/api/chat/history', async (req, res) => {
   try {
     const { projectPath } = req.query;
-    
+
     if (!projectPath) {
       return res.status(400).json({ error: 'Project path is required' });
     }
-    
+
     const historyPath = path.join(projectPath, '.gemini', 'chat_history.json');
-    
+
     try {
       await fs.unlink(historyPath);
     } catch (error) {
       // File doesn't exist, that's fine
     }
-    
+
     res.json({ success: true });
   } catch (error) {
     console.error('Error clearing chat history:', error);
@@ -552,20 +553,20 @@ app.delete('/api/chat/history', async (req, res) => {
 app.get('/api/files/list', async (req, res) => {
   try {
     const { path: dirPath } = req.query;
-    
+
     if (!dirPath) {
       return res.status(400).json({ error: 'Path is required' });
     }
-    
+
     const entries = await fs.readdir(dirPath, { withFileTypes: true });
     const files = [];
-    
+
     for (const entry of entries) {
       if (entry.name.startsWith('.')) continue; // Skip hidden files
-      
+
       const fullPath = path.join(dirPath, entry.name);
       const stats = await fs.stat(fullPath);
-      
+
       files.push({
         name: entry.name,
         path: fullPath,
@@ -574,7 +575,7 @@ app.get('/api/files/list', async (req, res) => {
         modified: stats.mtime.toISOString()
       });
     }
-    
+
     res.json({ files });
   } catch (error) {
     console.error('Error listing files:', error);
@@ -585,23 +586,23 @@ app.get('/api/files/list', async (req, res) => {
 app.get('/api/files/uploads', async (req, res) => {
   try {
     const { projectPath } = req.query;
-    
+
     if (!projectPath) {
       return res.json({ files: [] });
     }
-    
+
     const uploadsPath = path.join(projectPath, '.gemini', 'uploads');
-    
+
     try {
       await fs.access(uploadsPath);
       const entries = await fs.readdir(uploadsPath, { withFileTypes: true });
       const files = [];
-      
+
       for (const entry of entries) {
         if (entry.isFile()) {
           const fullPath = path.join(uploadsPath, entry.name);
           const stats = await fs.stat(fullPath);
-          
+
           files.push({
             name: entry.name,
             path: fullPath,
@@ -610,7 +611,7 @@ app.get('/api/files/uploads', async (req, res) => {
           });
         }
       }
-      
+
       res.json({ files });
     } catch (error) {
       // Uploads directory doesn't exist
@@ -628,7 +629,7 @@ const storage = multer.diskStorage({
   destination: async (req, file, cb) => {
     const { projectPath } = req.body;
     const uploadsDir = path.join(projectPath, '.gemini', 'uploads');
-    
+
     try {
       await fs.mkdir(uploadsDir, { recursive: true });
       cb(null, uploadsDir);
@@ -650,11 +651,11 @@ const upload = multer({ storage });
 app.post('/api/files/upload', upload.array('files'), async (req, res) => {
   try {
     const { projectPath } = req.body;
-    
+
     if (!projectPath) {
       return res.status(400).json({ error: 'Project path is required' });
     }
-    
+
     const files = req.files.map(file => ({
       name: file.filename,
       originalName: file.originalname,
@@ -662,7 +663,7 @@ app.post('/api/files/upload', upload.array('files'), async (req, res) => {
       size: file.size,
       type: file.mimetype
     }));
-    
+
     res.json({ files, success: true });
   } catch (error) {
     console.error('Error uploading files:', error);
@@ -682,72 +683,65 @@ app.use((error, req, res, next) => {
   res.status(500).json({ error: 'Internal server error' });
 });
 
+import https from 'https'; // Import the https module
+
 // Endpoint to get list of available models
 app.post('/api/models/list', async (req, res) => {
-  try {
-    const { apiKey } = req.body;
-    const execEnv = { ...process.env };
-    if (apiKey) {
-      execEnv.GEMINI_API_KEY = apiKey;
-    }
+  const { apiKey } = req.body;
 
-    // Command to list models in JSON format. Adjust if the actual command is different.
-    // Using "gemini models list --format json" as a common pattern.
-    // If gemini-cli uses a different flag or structure, this will need an update.
-    const command = 'gemini models list --format json';
-
-    const child = spawn('bash', ['-c', command], {
-      env: execEnv,
-      stdio: ['pipe', 'pipe', 'pipe']
-    });
-
-    let stdout = '';
-    let stderr = '';
-    let hasError = false;
-
-    child.stdout.on('data', (data) => {
-      stdout += data.toString();
-    });
-
-    child.stderr.on('data', (data) => {
-      stderr += data.toString();
-      if (stderr.toLowerCase().includes('error')) {
-          hasError = true;
-      }
-    });
-
-    child.on('close', (code) => {
-      if (hasError || code !== 0) {
-        console.error(`Error listing models: ${stderr}`);
-        // Try to parse stdout for any partial JSON that might contain an error message from the CLI
-        try {
-            const jsonError = JSON.parse(stdout);
-            if (jsonError && jsonError.error) {
-                return res.status(500).json({ error: jsonError.error.message || stderr || 'Failed to list models' });
-            }
-        } catch (e) {
-            // ignore parsing error, stdout might not be JSON
-        }
-        return res.status(500).json({ error: stderr || 'Failed to list models', details: stdout });
-      }
-      try {
-        const models = JSON.parse(stdout);
-        res.json({ models });
-      } catch (error) {
-        console.error('Error parsing models list JSON:', error);
-        res.status(500).json({ error: 'Failed to parse models list from CLI output', details: stdout });
-      }
-    });
-
-    child.on('error', (error) => {
-      console.error('Spawn error listing models:', error);
-      res.status(500).json({ error: `Failed to execute gemini command: ${error.message}` });
-    });
-
-  } catch (error) {
-    console.error('Error in /api/models/list:', error);
-    res.status(500).json({ error: error.message });
+  if (!apiKey) {
+    return res.status(400).json({ error: "API key is required to list models." });
   }
+
+  const options = {
+    hostname: 'generativelanguage.googleapis.com',
+    path: `/v1beta/models?key=${apiKey}`,
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+  };
+
+  const googleApiRequest = https.request(options, (googleApiRes) => {
+    let data = '';
+    googleApiRes.on('data', (chunk) => {
+      data += chunk;
+    });
+    googleApiRes.on('end', () => {
+      if (googleApiRes.statusCode >= 200 && googleApiRes.statusCode < 300) {
+        try {
+          const googleResponse = JSON.parse(data);
+          const transformedModels = (googleResponse.models || []).map(model => ({
+            // Use model.name (e.g., "models/gemini-pro") as the ID for consistency if CLI uses this form.
+            // Or model.baseModelId if the CLI expects shorter names like "gemini-pro".
+            // For now, let's assume the full name is more robust for API usage.
+            id: model.name,
+            name: model.displayName || model.name, // Fallback to model.name if displayName is not present
+            description: model.description || '', // Fallback to empty string
+            // Add other relevant fields if the UI can use them
+            version: model.version,
+            inputTokenLimit: model.inputTokenLimit,
+            outputTokenLimit: model.outputTokenLimit,
+            supportedGenerationMethods: model.supportedGenerationMethods,
+          }));
+          res.json({ models: transformedModels });
+        } catch (parseError) {
+          console.error('Error parsing Google API response for models:', parseError);
+          res.status(500).json({ error: 'Failed to parse model list from Google API.', details: parseError.message });
+        }
+      } else {
+        console.error(`Google API error for listing models: ${googleApiRes.statusCode}`, data);
+        res.status(googleApiRes.statusCode || 500).json({ error: 'Failed to fetch model list from Google API.', details: data });
+      }
+    });
+  });
+
+  googleApiRequest.on('error', (error) => {
+    console.error('Error making request to Google API for models:', error);
+    res.status(500).json({ error: 'Failed to connect to Google API for model list.', details: error.message });
+  });
+
+  googleApiRequest.end();
 });
 
 // Start server
@@ -762,12 +756,12 @@ server.listen(PORT, () => {
 // Graceful shutdown
 process.on('SIGINT', () => {
   console.log('\n🛑 Shutting down server...');
-  
+
   // Close all active PTY sessions
   for (const [sessionId, session] of activeSessions) {
     session.ptyProcess?.kill();
   }
-  
+
   server.close(() => {
     console.log('✅ Server shut down gracefully');
     process.exit(0);

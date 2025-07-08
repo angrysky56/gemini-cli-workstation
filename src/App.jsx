@@ -927,7 +927,8 @@ const ModelSelectionTab = ({ settings, setSettings, envVars, api }) => {
   };
 
   const selectModel = (modelId) => {
-    setSettings({ ...settings, selectedModel: modelId });
+    setSettings(s => ({ ...s, selectedModel: modelId }));
+    setChangedUserSettings(cs => ({ ...cs, selectedModel: modelId }));
   };
 
   const getCategoryColor = (modelId) => {
@@ -1070,6 +1071,8 @@ function App() {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [currentProject, setCurrentProject] = useState("");
   const [serverHealth, setServerHealth] = useState(false);
+  const [socket, setSocket] = useState(null);
+  const [conversation, setConversation] = useState([]); // Lifted from ModernChatInterface
 
   // Enhanced autosave state management
   const [autoSaveStatus, setAutoSaveStatus] = useState({
@@ -1089,11 +1092,19 @@ function App() {
     const saved = localStorage.getItem('gemini-cli-settings');
     return saved ? { ...defaultSettings, ...JSON.parse(saved) } : defaultSettings;
   });
+  const [changedUserSettings, setChangedUserSettings] = useState({});
 
   const [envVars, setEnvVars] = useState(() => {
     const saved = localStorage.getItem('gemini-cli-env');
     return saved ? { ...defaultEnvVars, ...JSON.parse(saved) } : defaultEnvVars;
   });
+  const [changedEnvVars, setChangedEnvVars] = useState({});
+
+  // Helper to update main envVars state and changedEnvVars state
+  const updateEnvVar = (key, value) => {
+    setEnvVars(prev => ({ ...prev, [key]: value }));
+    setChangedEnvVars(prev => ({ ...prev, [key]: value }));
+  };
 
   // Toast notification function
   const showToast = (message, type = 'info') => {
@@ -1116,6 +1127,84 @@ function App() {
     return () => clearInterval(interval);
   }, []);
 
+  // WebSocket connection management
+  useEffect(() => {
+    console.log('[WS Effect Triggered] Dependencies changed or mount. ActiveTab:', activeTab, 'Project:', currentProject);
+    if (activeTab === 'chat' && currentProject) {
+      const backendPort = import.meta.env.VITE_BACKEND_PORT || '3001';
+      const wsUrl = `ws://localhost:${backendPort}`; // Connect to root path
+      console.log(`Connecting to WebSocket: ${wsUrl} for project: ${currentProject}`);
+
+      const newSocket = new WebSocket(wsUrl);
+
+      newSocket.onopen = () => {
+        console.log('Frontend: WebSocket connection established.');
+        setSocket(newSocket);
+        // Optionally send an initial message, e.g., to set project context for PTY if backend supports it
+        // newSocket.send(JSON.stringify({ type: 'init_session', projectPath: currentProject }));
+      };
+
+      newSocket.onmessage = (event) => {
+        console.log('Frontend: WebSocket raw message received:', event.data); // Log raw message
+        try {
+          const message = JSON.parse(event.data);
+          // console.log('WebSocket message received:', message); // Debug log
+          if (message.type === 'pty_output') {
+            // Append raw PTY data to conversation.
+            // The backend sends data chunks, not structured messages.
+            // We'll create a simple structure for display.
+            setConversation(prev => [
+              ...prev,
+              { type: 'assistant_raw', content: message.data, timestamp: new Date().toISOString() }
+            ]);
+          } else if (message.type === 'pty_exit') {
+            console.log(`PTY session exited with code: ${message.exitCode}, signal: ${message.signal}`);
+            setConversation(prev => [
+              ...prev,
+              { type: 'info', content: `Session ended (code: ${message.exitCode}, signal: ${message.signal})`, timestamp: new Date().toISOString() }
+            ]);
+            newSocket.close(); // Close WebSocket if PTY exited
+          } else if (message.type === 'error') {
+             console.error('Backend WebSocket error:', message.data?.message || 'Unknown error');
+             setConversation(prev => [
+               ...prev,
+               { type: 'error', content: `Backend error: ${message.data?.message || 'Unknown error'}`, timestamp: new Date().toISOString() }
+             ]);
+          }
+        } catch (e) {
+          console.error('Error processing WebSocket message or non-JSON message:', event.data, e);
+           setConversation(prev => [
+             ...prev,
+             { type: 'error', content: `Received unparseable data: ${event.data}`, timestamp: new Date().toISOString() }
+           ]);
+        }
+      };
+
+      newSocket.onclose = (event) => {
+        console.log('Frontend: WebSocket connection closed. Code:', event.code, 'Reason:', event.reason, 'WasClean:', event.wasClean);
+        setSocket(null);
+        // Optionally add automatic reconnection logic here
+      };
+
+      newSocket.onerror = (error) => {
+        console.error('Frontend: WebSocket error:', error);
+        // onclose will usually be called after onerror
+      };
+
+      return () => {
+        console.log('[WS Effect Cleanup] Closing WebSocket due to deps change or unmount. ActiveTab:', activeTab, 'Project:', currentProject);
+        newSocket.close();
+      };
+    } else {
+      // If not in chat tab or no project, ensure any existing socket is closed
+      if (socket) {
+        console.log('[WS Effect Cleanup] Leaving chat tab or project deselected, closing WebSocket. ActiveTab:', activeTab, 'Project:', currentProject);
+        socket.close();
+        setSocket(null);
+      }
+    }
+  }, [activeTab, currentProject]); // Re-run effect if activeTab or currentProject changes
+
   const handleProjectChange = async (projectPath, config) => {
     if (config?.settings) {
       setSettings(prev => ({ ...prev, ...config.settings }));
@@ -1124,6 +1213,9 @@ function App() {
     if (config?.env) {
       setEnvVars(prev => ({ ...prev, ...config.env }));
     }
+    // After loading a project, reset any pending changes
+    setChangedUserSettings({});
+    setChangedEnvVars({});
   };
 
   // Enhanced Auto-save settings with visual feedback
@@ -1140,11 +1232,15 @@ function App() {
   // Enhanced Auto-save settings to project when they change
   useEffect(() => {
     const autoSave = async () => {
-      if (currentProject && settings && envVars) {
+      // Only auto-save if there's a current project and actual changes pending
+      if (currentProject && (Object.keys(changedUserSettings).length > 0 || Object.keys(changedEnvVars).length > 0)) {
         setAutoSaveStatus(prev => ({ ...prev, status: 'saving' }));
-
         try {
-          await api.saveConfig(currentProject, settings, envVars);
+          await api.saveConfig(currentProject, changedUserSettings, changedEnvVars);
+
+          setChangedUserSettings({}); // Reset changed settings after successful auto-save
+          setChangedEnvVars({});    // Reset changed envVars after successful auto-save
+
           setAutoSaveStatus({
             status: 'saved',
             lastSaved: new Date(),
@@ -1152,7 +1248,6 @@ function App() {
           });
           console.log('Configuration auto-saved to project:', currentProject);
 
-          // Reset status after 3 seconds
           setTimeout(() => {
             setAutoSaveStatus(prev => ({ ...prev, status: 'idle' }));
           }, 3000);
@@ -1164,36 +1259,22 @@ function App() {
             lastSaved: null,
             error: error.message
           });
-
-          // Show toast notification for error
           showToast(`Auto-save failed: ${error.message}`, 'error');
-
-          // Try to retry after 5 seconds
-          setTimeout(async () => {
-            try {
-              await api.saveConfig(currentProject, settings, envVars);
-              setAutoSaveStatus({
-                status: 'saved',
-                lastSaved: new Date(),
-                error: null
-              });
-              showToast('Configuration auto-saved successfully (retry)', 'success');
-              setTimeout(() => {
-                setAutoSaveStatus(prev => ({ ...prev, status: 'idle' }));
-              }, 3000);
-            } catch (retryError) {
-              console.error('Auto-save retry failed:', retryError);
-              showToast('Auto-save retry failed. Please save manually.', 'error');
-            }
-          }, 5000);
+          // No automatic retry for auto-save to prevent loops on persistent errors. User can manually save.
         }
       }
     };
 
-    // Debounce auto-save to avoid excessive API calls
-    const timeoutId = setTimeout(autoSave, 1000);
+    // Debounce auto-save
+    // Trigger auto-save when settings or envVars change, but only if there are tracked changes.
+    const timeoutId = setTimeout(() => {
+      if (Object.keys(changedUserSettings).length > 0 || Object.keys(changedEnvVars).length > 0) {
+        autoSave();
+      }
+    }, 1000); // 1-second debounce
+
     return () => clearTimeout(timeoutId);
-  }, [settings, envVars, currentProject]);
+  }, [settings, envVars, currentProject, changedUserSettings, changedEnvVars]); // Add changedUserSettings and changedEnvVars to dependencies
 
   const saveToProject = async () => {
     if (!currentProject) {
@@ -1204,7 +1285,18 @@ function App() {
     setAutoSaveStatus(prev => ({ ...prev, status: 'saving' }));
 
     try {
-      await api.saveConfig(currentProject, settings, envVars);
+      // Send only changed settings and envVars
+      if (Object.keys(changedUserSettings).length === 0 && Object.keys(changedEnvVars).length === 0) {
+        showToast('No changes to save.', 'info');
+        setAutoSaveStatus(prev => ({ ...prev, status: 'idle' }));
+        return;
+      }
+
+      await api.saveConfig(currentProject, changedUserSettings, changedEnvVars);
+
+      setChangedUserSettings({}); // Reset changed settings after successful save
+      setChangedEnvVars({});    // Reset changed envVars after successful save
+
       setAutoSaveStatus({
         status: 'saved',
         lastSaved: new Date(),
@@ -1270,12 +1362,11 @@ function App() {
       case 'chat':
         return (
           <ModernChatInterface
-            settings={settings}
-            setSettings={setSettings}
-            envVars={envVars}
+            settings={settings} // Reverted prop name to settings
             currentProject={currentProject}
-            setCurrentProject={setCurrentProject}
-            api={api}
+            conversation={conversation} // Pass down the conversation state from App.jsx
+            setConversation={setConversation} // Pass down setter if MCI still adds user messages locally first
+            socket={socket} // Pass the socket object directly
           />
         );
 
@@ -1321,7 +1412,7 @@ function App() {
                     <input
                       type="password"
                       value={envVars.GEMINI_API_KEY}
-                      onChange={(e) => setEnvVars({...envVars, GEMINI_API_KEY: e.target.value})}
+                      onChange={(e) => updateEnvVar('GEMINI_API_KEY', e.target.value)}
                       placeholder="Enter your Gemini API key"
                       className="w-full bg-gray-900/50 border border-white/20 rounded-lg px-4 py-3 text-white placeholder-gray-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
                     />
@@ -1356,7 +1447,7 @@ function App() {
                     <input
                       type="text"
                       value={envVars.GOOGLE_CLOUD_PROJECT}
-                      onChange={(e) => setEnvVars({...envVars, GOOGLE_CLOUD_PROJECT: e.target.value})}
+                      onChange={(e) => updateEnvVar('GOOGLE_CLOUD_PROJECT', e.target.value)}
                       placeholder="your-project-id"
                       className="w-full bg-gray-900/50 border border-white/20 rounded-lg px-4 py-3 text-white placeholder-gray-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
                     />
@@ -1369,7 +1460,7 @@ function App() {
                     <input
                       type="text"
                       value={envVars.GOOGLE_CLOUD_LOCATION}
-                      onChange={(e) => setEnvVars({...envVars, GOOGLE_CLOUD_LOCATION: e.target.value})}
+                      onChange={(e) => updateEnvVar('GOOGLE_CLOUD_LOCATION', e.target.value)}
                       placeholder="us-central1"
                       className="w-full bg-gray-900/50 border border-white/20 rounded-lg px-4 py-3 text-white placeholder-gray-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
                     />
@@ -1386,7 +1477,7 @@ function App() {
                         type="radio"
                         name="vertexai"
                         checked={envVars.GOOGLE_GENAI_USE_VERTEXAI === "true"}
-                        onChange={() => setEnvVars({...envVars, GOOGLE_GENAI_USE_VERTEXAI: "true"})}
+                        onChange={() => updateEnvVar('GOOGLE_GENAI_USE_VERTEXAI', "true")}
                         className="text-blue-500"
                       />
                       <span className="text-sm text-gray-300">Enable Vertex AI</span>
@@ -1396,7 +1487,7 @@ function App() {
                         type="radio"
                         name="vertexai"
                         checked={envVars.GOOGLE_GENAI_USE_VERTEXAI === "false"}
-                        onChange={() => setEnvVars({...envVars, GOOGLE_GENAI_USE_VERTEXAI: "false"})}
+                        onChange={() => updateEnvVar('GOOGLE_GENAI_USE_VERTEXAI', "false")}
                         className="text-blue-500"
                       />
                       <span className="text-sm text-gray-300">Use Gemini API</span>
@@ -1411,7 +1502,7 @@ function App() {
                   <input
                     type="password"
                     value={envVars.GOOGLE_API_KEY}
-                    onChange={(e) => setEnvVars({...envVars, GOOGLE_API_KEY: e.target.value})}
+                    onChange={(e) => updateEnvVar('GOOGLE_API_KEY', e.target.value)}
                     placeholder="Enter Google API key for Vertex AI"
                     className="w-full bg-gray-900/50 border border-white/20 rounded-lg px-4 py-3 text-white placeholder-gray-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
                   />
@@ -1425,7 +1516,7 @@ function App() {
                   <input
                     type="text"
                     value={envVars.GOOGLE_APPLICATION_CREDENTIALS}
-                    onChange={(e) => setEnvVars({...envVars, GOOGLE_APPLICATION_CREDENTIALS: e.target.value})}
+                    onChange={(e) => updateEnvVar('GOOGLE_APPLICATION_CREDENTIALS', e.target.value)}
                     placeholder="/path/to/your/credentials.json"
                     className="w-full bg-gray-900/50 border border-white/20 rounded-lg px-4 py-3 text-white placeholder-gray-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
                   />
@@ -1480,7 +1571,11 @@ function App() {
                   <input
                     type="text"
                     value={settings.baseFolderPath || ''}
-                    onChange={(e) => setSettings({...settings, baseFolderPath: e.target.value})}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setSettings(s => ({ ...s, baseFolderPath: val }));
+                      setChangedUserSettings(cs => ({ ...cs, baseFolderPath: val }));
+                    }}
                     placeholder="/home/ty/Repositories"
                     className="w-full bg-gray-900/50 border border-white/20 rounded-lg px-4 py-3 text-white placeholder-gray-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
                   />
@@ -1493,7 +1588,11 @@ function App() {
                   <label className="block text-sm font-medium text-gray-300 mb-2">Theme</label>
                   <select
                     value={settings.theme}
-                    onChange={(e) => setSettings({...settings, theme: e.target.value})}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setSettings(s => ({ ...s, theme: val }));
+                      setChangedUserSettings(cs => ({ ...cs, theme: val }));
+                    }}
                     className="w-full bg-gray-900/50 border border-white/20 rounded-lg px-4 py-3 text-white focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
                   >
                     <option value="Default">Default</option>
@@ -1508,7 +1607,11 @@ function App() {
                     <p className="text-xs text-gray-400 mt-1">Skip confirmation for read-only operations</p>
                   </div>
                   <button
-                    onClick={() => setSettings({...settings, autoAccept: !settings.autoAccept})}
+                    onClick={() => {
+                      const newVal = !settings.autoAccept;
+                      setSettings(s => ({ ...s, autoAccept: newVal }));
+                      setChangedUserSettings(cs => ({ ...cs, autoAccept: newVal }));
+                    }}
                     className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
                       settings.autoAccept ? 'bg-blue-600' : 'bg-gray-600'
                     }`}
@@ -1525,7 +1628,11 @@ function App() {
                     <p className="text-xs text-gray-400 mt-1">Run tools in isolated environment</p>
                   </div>
                   <button
-                    onClick={() => setSettings({...settings, sandbox: !settings.sandbox})}
+                    onClick={() => {
+                      const newVal = !settings.sandbox;
+                      setSettings(s => ({ ...s, sandbox: newVal }));
+                      setChangedUserSettings(cs => ({ ...cs, sandbox: newVal }));
+                    }}
                     className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
                       settings.sandbox ? 'bg-blue-600' : 'bg-gray-600'
                     }`}
@@ -1542,13 +1649,12 @@ function App() {
                     <p className="text-xs text-gray-400 mt-1">Hide git-ignored files in file selector</p>
                   </div>
                   <button
-                    onClick={() => setSettings({
-                      ...settings,
-                      fileFiltering: {
-                        ...settings.fileFiltering,
-                        respectGitIgnore: !settings.fileFiltering.respectGitIgnore
-                      }
-                    })}
+                    onClick={() => {
+                      const newVal = !settings.fileFiltering.respectGitIgnore;
+                      const newFileFilteringSettings = { ...settings.fileFiltering, respectGitIgnore: newVal };
+                      setSettings(s => ({ ...s, fileFiltering: newFileFilteringSettings }));
+                      setChangedUserSettings(cs => ({ ...cs, fileFiltering: newFileFilteringSettings }));
+                    }}
                     className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
                       settings.fileFiltering.respectGitIgnore ? 'bg-blue-600' : 'bg-gray-600'
                     }`}
